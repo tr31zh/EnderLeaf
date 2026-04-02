@@ -7,15 +7,15 @@ import threading
 import socket
 import io
 import warnings
-import json
 from typing import Optional, Dict, Tuple, List
 from time import sleep
+
 import serial
-from ipywidgets import widgets, Button, Layout, ButtonStyle, GridspecLayout, Output
-from IPython.display import display, Image
-import numpy as np
+
+from IPython.display import Image
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
+
+from enderscope.bed import bed
 
 
 class _VirtualPositionHistory:
@@ -48,7 +48,10 @@ class _VirtualPositionHistory:
     def set_xyz(self, points: List[Tuple[float, float, float]], e: float = 0.0) -> None:
         """Replace history with a list of (x, y, z) points."""
         with self._lock:
-            self._points = [(time.time(), float(x), float(y), float(z), float(e)) for (x, y, z) in points]
+            self._points = [
+                (time.time(), float(x), float(y), float(z), float(e))
+                for (x, y, z) in points
+            ]
 
 
 class _VirtualStagePathPlotter:
@@ -57,7 +60,9 @@ class _VirtualStagePathPlotter:
     Uses a Matplotlib timer to refresh from the history buffer.
     """
 
-    def __init__(self, history: _VirtualPositionHistory, title: str = "Virtual Stage Path"):
+    def __init__(
+        self, history: _VirtualPositionHistory, title: str = "Virtual Stage Path"
+    ):
         self._history = history
         self._title = title
         self._last_len = 0
@@ -70,22 +75,22 @@ class _VirtualStagePathPlotter:
 
         # Create a 3D plot.
         self._fig = plt.figure()
-        self._ax = self._fig.add_subplot(111, projection='3d')
+        self._ax = self._fig.add_subplot(111, projection="3d")
         self._ax.set_title(self._title)
-        self._ax.set_xlabel('X')
-        self._ax.set_ylabel('Y')
-        self._ax.set_zlabel('Z')
+        self._ax.set_xlabel("X")
+        self._ax.set_ylabel("Y")
+        self._ax.set_zlabel("Z")
         try:
-            self._ax.set_xlim(-10, 300)
-            self._ax.set_ylim(-10, 300)
-            self._ax.set_zlim(-10, 300)
+            self._ax.set_xlim(*bed.x_lim)
+            self._ax.set_ylim(*bed.y_lim)
+            self._ax.set_zlim(*bed.z_lim)
         except Exception:
             pass
-        (self._line,) = self._ax.plot([], [], [], '-', linewidth=1)
-        (self._pt,) = self._ax.plot([], [], [], 'o', color='lightgreen', markersize=12)
+        (self._line,) = self._ax.plot([], [], [], "-", linewidth=1)
+        (self._pt,) = self._ax.plot([], [], [], "o", color="lightgreen", markersize=12)
 
         try:
-            self._fig.canvas.mpl_connect('close_event', self._on_close)
+            self._fig.canvas.mpl_connect("close_event", self._on_close)
         except Exception:
             pass
 
@@ -94,6 +99,7 @@ class _VirtualStagePathPlotter:
         # - For inline backends, we use an IPython display handle and refresh on-demand.
         try:
             import matplotlib
+
             backend = (matplotlib.get_backend() or "").lower()
         except Exception:
             backend = ""
@@ -109,6 +115,7 @@ class _VirtualStagePathPlotter:
                 )
             try:
                 from IPython.display import display
+
                 self._display_handle = display(self._fig, display_id=True)
                 # Prevent the inline backend from auto-displaying the same figure
                 # again at the end of the cell execution.
@@ -207,7 +214,9 @@ class _VirtualStagePathPlotter:
             pass
 
         try:
-            self._scatter = self._ax.scatter(xs, ys, zs, c='red', s=12, depthshade=False)
+            self._scatter = self._ax.scatter(
+                xs, ys, zs, c="red", s=12, depthshade=False
+            )
         except Exception:
             self._scatter = None
         self._pt.set_data([xs[-1]], [ys[-1]])
@@ -215,9 +224,9 @@ class _VirtualStagePathPlotter:
 
         # Use fixed limits for a stable view.
         try:
-            self._ax.set_xlim(-10, 300)
-            self._ax.set_ylim(-10, 300)
-            self._ax.set_zlim(-10, 300)
+            self._ax.set_xlim(*bed.x_lim)
+            self._ax.set_ylim(*bed.y_lim)
+            self._ax.set_zlim(*bed.z_lim)
         except Exception:
             pass
 
@@ -255,13 +264,14 @@ class _VirtualStagePathPlotter:
             except Exception:
                 pass
 
+
 G_CODES = {
-    'absolute': 'G90',
-    'relative': 'G91',
-    'homing': 'G28',
-    'finish': 'M400',
-    'set_speed_limit': 'M203',    
-    'current_position': 'M114'
+    "absolute": "G90",
+    "relative": "G91",
+    "homing": "G28",
+    "finish": "M400",
+    "set_speed_limit": "M203",
+    "current_position": "M114",
 }
 DIRECTION_PREFIXES = {
     "north": "Y",
@@ -269,7 +279,7 @@ DIRECTION_PREFIXES = {
     "east": "X",
     "west": "X-",
     "up": "Z",
-    "down": "Z-"
+    "down": "Z-",
 }
 
 
@@ -281,10 +291,11 @@ DIRECTION_PREFIXES = {
 # - Windows: uses a TCP server and connects via pyserial's socket:// URL.
 # ------------------------------------------------------------
 
+
 def _vs_strip_comments(line: str) -> str:
     # Very small Marlin-like comment handling: ';' starts a comment.
-    if ';' in line:
-        line = line.split(';', 1)[0]
+    if ";" in line:
+        line = line.split(";", 1)[0]
     return line.strip()
 
 
@@ -391,8 +402,7 @@ class _VirtualMarlinProtocol:
             # Current position: Stage.get_position expects one line, then an ok line.
             s = self.state
             pos = (
-                f"X:{s.x:.2f} Y:{s.y:.2f} Z:{s.z:.2f} E:{s.e:.2f} "
-                f"Count X:0 Y:0 Z:0"
+                f"X:{s.x:.2f} Y:{s.y:.2f} Z:{s.z:.2f} E:{s.e:.2f} " f"Count X:0 Y:0 Z:0"
             )
             return [pos, "ok"]
 
@@ -416,7 +426,9 @@ class _VirtualMarlinProtocol:
         self.state.history.add(self.state.x, self.state.y, self.state.z, self.state.e)
         if self._on_position_update is not None:
             try:
-                self._on_position_update(self.state.x, self.state.y, self.state.z, self.state.e)
+                self._on_position_update(
+                    self.state.x, self.state.y, self.state.z, self.state.e
+                )
             except Exception:
                 pass
         return ["ok"]
@@ -658,15 +670,21 @@ class _VirtualMarlinDevice:
         # Connect with pyserial to the exposed endpoint
         ep = self._backend.endpoint()
         if ep.startswith("socket://"):
-            self.serial = serial.serial_for_url(ep, baudrate=baudrate, timeout=1, write_timeout=1)
+            self.serial = serial.serial_for_url(
+                ep, baudrate=baudrate, timeout=1, write_timeout=1
+            )
         else:
-            self.serial = serial.Serial(ep, baudrate=baudrate, timeout=1, write_timeout=1)
+            self.serial = serial.Serial(
+                ep, baudrate=baudrate, timeout=1, write_timeout=1
+            )
 
         # Emit a short startup banner
         for line in self._proto.startup_lines():
             self._backend.write((line + "\n").encode("utf-8"))
 
-        self._thread = threading.Thread(target=self._run, name="VirtualMarlin", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="VirtualMarlin", daemon=True
+        )
         self._thread.start()
 
         atexit.register(self.close)
@@ -699,26 +717,27 @@ class _VirtualMarlinDevice:
             for out in self._proto.handle(text):
                 self._backend.write((out + "\n").encode("utf-8"))
 
+
 class SerialUtils:
 
     def serial_ports():
-        """ Lists serial port names
-        		from: https://stackoverflow.com/a/14224477
-            :raises EnvironmentError:
-                On unsupported or unknown platforms
-            :returns:
-                A list of the serial ports available on the system
+        """Lists serial port names
+                    from: https://stackoverflow.com/a/14224477
+        :raises EnvironmentError:
+            On unsupported or unknown platforms
+        :returns:
+            A list of the serial ports available on the system
         """
-        if sys.platform.startswith('win'):
-            ports = [f'COM{i + 1}' for i in range(256)]
-        elif sys.platform.startswith('linux') or sys.platform.startswith('cygwin'):
+        if sys.platform.startswith("win"):
+            ports = [f"COM{i + 1}" for i in range(256)]
+        elif sys.platform.startswith("linux") or sys.platform.startswith("cygwin"):
             # this excludes your current terminal "/dev/tty"
-            ports = glob.glob('/dev/tty[A-Za-z]*')
-        elif sys.platform.startswith('darwin'):
-            ports = glob.glob('/dev/tty.*')
+            ports = glob.glob("/dev/tty[A-Za-z]*")
+        elif sys.platform.startswith("darwin"):
+            ports = glob.glob("/dev/tty.*")
         else:
-            raise EnvironmentError('Unsupported platform')
-    
+            raise EnvironmentError("Unsupported platform")
+
         result = []
         for port in ports:
             try:
@@ -731,10 +750,16 @@ class SerialUtils:
 
 
 class SerialDevice:
-    def __init__(self, port, baud_rate, parity=serial.PARITY_NONE,
-                 stop_bits=serial.STOPBITS_ONE, byte_size=serial.EIGHTBITS):
+    def __init__(
+        self,
+        port,
+        baud_rate,
+        parity=serial.PARITY_NONE,
+        stop_bits=serial.STOPBITS_ONE,
+        byte_size=serial.EIGHTBITS,
+    ):
         self._virtual_device = None
-        if isinstance(port, str) and port.lower() == 'virtual':
+        if isinstance(port, str) and port.lower() == "virtual":
             # Create a virtual Marlin device and attach pyserial to it.
             self._virtual_device = _VirtualMarlinDevice(baudrate=baud_rate)
             self.serial = self._virtual_device.serial
@@ -760,14 +785,22 @@ class SerialDevice:
             code += "\n"
         self.serial.write(bytes(code, "utf-8"))
 
+
 class Stage(SerialDevice):
     """
     This is the 3 axis stage that moves the sample
     """
 
-    def __init__(self, port, baud_rate, homing=False, parity=serial.PARITY_NONE,
-                 stop_bits=serial.STOPBITS_ONE, byte_size=serial.EIGHTBITS,
-                 plot_virtual_path: bool = True):
+    def __init__(
+        self,
+        port,
+        baud_rate,
+        homing=False,
+        parity=serial.PARITY_NONE,
+        stop_bits=serial.STOPBITS_ONE,
+        byte_size=serial.EIGHTBITS,
+        plot_virtual_path: bool = True,
+    ):
         super().__init__(port, baud_rate, parity, stop_bits, byte_size)
 
         # If we're using the virtual stage, pop up a live XYZ path plot.
@@ -781,7 +814,7 @@ class Stage(SerialDevice):
             except Exception:
                 self._virtual_path_plotter = None
 
-        if homing==True:
+        if homing == True:
             self.home()
 
     def get_position_history(self, xyze: bool = False):
@@ -854,7 +887,7 @@ class Stage(SerialDevice):
             # Fallback: clear and re-add
             try:
                 vd.history.clear()
-                for (x, y, z) in points:
+                for x, y, z in points:
                     vd.history.add(x, y, z, 0.0)
             except Exception:
                 pass
@@ -879,17 +912,17 @@ class Stage(SerialDevice):
                 self._virtual_path_plotter.force_refresh()
             except Exception:
                 pass
-        
+
     def write_code(self, code, check_ok=True, debug=False):
         super().write_code(code)
-        response = self.serial.readline().decode('utf-8')
+        response = self.serial.readline().decode("utf-8")
         if check_ok:
             while not response.startswith("ok"):
                 if debug:
-                    print (response.strip('\n'))
-                response = self.serial.readline().decode('utf-8')
+                    print(response.strip("\n"))
+                response = self.serial.readline().decode("utf-8")
         if debug:
-            print(code)        
+            print(code)
 
         # In notebooks (inline backend), timers may not run; refresh after each
         # command that could update the position.
@@ -911,7 +944,7 @@ class Stage(SerialDevice):
         code = f"G0 F{speed}"
         self.write_code(code, debug=debug)
 
-    def set_speed_limit(self, speed, axis='x', debug=False):
+    def set_speed_limit(self, speed, axis="x", debug=False):
         """
         Sets the speed of the stage
 
@@ -919,8 +952,9 @@ class Stage(SerialDevice):
         :param str axis: axis to set speed for, one of 'x', 'y', 'z'
         :param bool debug: print the command to be sent
         """
-        self.write_code(f'{G_CODES["set_speed_limit"]} {axis.upper()}{speed}',
-                        debug=debug)
+        self.write_code(
+            f'{G_CODES["set_speed_limit"]} {axis.upper()}{speed}', debug=debug
+        )
 
     def move_absolute(self, x, y, z=None, debug=False):
         """
@@ -945,14 +979,14 @@ class Stage(SerialDevice):
         """
         if p is not None:
             self.set_absolute()
-            if len(p)<3 :
-                x,y = p
+            if len(p) < 3:
+                x, y = p
                 code = f"G0 X {x} Y {y}"
             else:
-                x,y,z = p
+                x, y, z = p
                 code = f"G0 X {x} Y {y} Z {z}"
             self.write_code(code, debug=debug)
-            
+
     def move_relative(self, x, y, z=None, debug=False):
         """
         Moves the stage by given mm distance
@@ -977,7 +1011,7 @@ class Stage(SerialDevice):
         :return:
         """
         self.set_relative()
-        if direction.lower() in ('up', 'down'):
+        if direction.lower() in ("up", "down"):
             code = f"G0 {DIRECTION_PREFIXES[direction.lower()]}{distance}"
         else:
             code = f"G0 {DIRECTION_PREFIXES[direction.lower()]}{distance}"
@@ -995,321 +1029,31 @@ class Stage(SerialDevice):
 
     def get_position(self, dict=False, debug=False):
         self.flush_serial_buffer()
-        response = self.write_code(G_CODES['current_position'],
-                                   check_ok=False)
+        response = self.write_code(G_CODES["current_position"], check_ok=False)
         if debug:
             print(response)
         ok = self.serial.readline()
-        if not ok.decode('utf-8').startswith("ok"):
+        if not ok.decode("utf-8").startswith("ok"):
             print("Error reading stage position")
             return
         position = response.split(" Count")[0]
         parts = position.split()
         positions = {part.split(":")[0]: float(part.split(":")[1]) for part in parts}
-        if dict==False:
-            order = ['X','Y', 'Z']
+        if dict == False:
+            order = ["X", "Y", "Z"]
             positions = tuple([positions[field] for field in order])
         return positions
 
     def home(self, debug=False):
-        self.write_code(G_CODES['homing'], debug=debug)
+        self.write_code(G_CODES["homing"], debug=debug)
 
     def finish_moves(self, debug=False):
-        self.write_code(G_CODES['finish'], debug=debug)
+        self.write_code(G_CODES["finish"], debug=debug)
 
     def set_relative(self, debug=False):
-        self.write_code(G_CODES['relative'], debug=debug)
+        self.write_code(G_CODES["relative"], debug=debug)
 
     def set_absolute(self, debug=False):
-        self.write_code(G_CODES['absolute'], debug=debug)
+        self.write_code(G_CODES["absolute"], debug=debug)
 
-class Panel():
-    def create_button(self, description, bcolor):
-        b = Button(description=description, style=dict(button_color=bcolor), layout=Layout(height='auto', width='auto'))
-        b.on_click(self.on_button_clicked)
-        return b
 
-    def set_steps(self, xys,zs):
-        self.xys = xys
-        self.zs = zs
-        
-    def checkbox_changed(self,element):
-        if element['new'] == True:
-            self.recording = True
-            element['owner'].description = 'Recording...'
-        else:
-            self.recording = False
-            element['owner'].description = 'Record'
-        
-    def on_button_clicked(self, b):
-        positions_path = os.path.join(os.getcwd(), "positions.json")
-
-        if b.description == 'Home':
-            with self.output:
-                self.output.clear_output()
-                print("homing...")
-            self.s.home()
-            with self.output:
-                self.output.clear_output()
-                print("moving...")
-                self.s.finish_moves()
-                self.output.clear_output()
-                print(self.s.get_position(dict=True))
-            return
-
-        elif b.description.startswith('P'):
-            m = int(b.description[-1]) - 1
-            if self.recording == True:
-                self.recorded_positions[m] = self.s.get_position()
-                b.style.button_color = "#ffd6b9"
-            elif self.recorded_positions[m] is not None:
-                self.s.move_position(self.recorded_positions[m])
-            with self.output:
-                self.output.clear_output()
-                print("moving...")
-                self.s.finish_moves()
-                self.output.clear_output()
-                print(self.s.get_position(dict=True))
-            return
-
-        elif b.description.startswith('Save'):
-            payload = {
-                "recorded_positions": [
-                    (list(p) if p is not None else None) for p in self.recorded_positions
-                ]
-            }
-            try:
-                with open(positions_path, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, indent=2)
-                with self.output:
-                    self.output.clear_output()
-                    print(f"saved {positions_path}")
-            except Exception as e:
-                with self.output:
-                    self.output.clear_output()
-                    print(f"error saving {positions_path}: {e}")
-            return
-
-        elif b.description.startswith('Open'):
-            try:
-                with open(positions_path, "r", encoding="utf-8") as f:
-                    payload = json.load(f)
-                raw = payload.get("recorded_positions", [])
-                loaded: List[Optional[Tuple[float, float, float]]] = []
-                for item in raw:
-                    if item is None:
-                        loaded.append(None)
-                        continue
-                    if isinstance(item, (list, tuple)) and len(item) >= 2:
-                        x = float(item[0])
-                        y = float(item[1])
-                        z = float(item[2]) if len(item) >= 3 else 0.0
-                        loaded.append((x, y, z))
-                    else:
-                        loaded.append(None)
-
-                # Keep exactly 6 slots (P1..P6)
-                loaded = (loaded + [None] * 6)[:6]
-                self.recorded_positions = loaded
-
-                # Update P1..P6 button colors to reflect loaded slots.
-                for idx in range(6):
-                    btn = getattr(self, "_pos_buttons", {}).get(idx)
-                    if btn is None:
-                        continue
-                    btn.style.button_color = "#ffd6b9" if self.recorded_positions[idx] is not None else "lightgrey"
-
-                with self.output:
-                    self.output.clear_output()
-                    print(f"opened {positions_path}")
-            except FileNotFoundError:
-                with self.output:
-                    self.output.clear_output()
-                    print(f"no file found: {positions_path}")
-            except Exception as e:
-                with self.output:
-                    self.output.clear_output()
-                    print(f"error opening {positions_path}: {e}")
-            return
-
-        # Default: move by direction name (Up/Down/North/South/East/West)
-        self.s.move_towards(b.description, 5)
-        with self.output:
-            self.output.clear_output()
-            print("moving...")
-            self.s.finish_moves()
-            self.output.clear_output()
-            print(self.s.get_position(dict=True))
-            
-    def __init__(self, s):
-        self.recording = False
-        self.recorded_positions = [None for i in range(6)] 
-        self._pos_buttons = {}
-        self.s = s
-        grid = GridspecLayout(5, 12, height='auto', width='auto')
-        grid[0:2, 0] = self.create_button('Up', 'paleturquoise')
-        grid[2:, 0] = self.create_button('Down', 'paleturquoise')
-        grid[0, 1:3] = self.create_button('North', 'palegreen')
-        grid[2, 1:3] = self.create_button('South', 'palegreen')
-        grid[1, 1] = self.create_button('West', 'palegreen')
-        grid[1, 2] = self.create_button('East', 'palegreen')
-        grid[3:, 1:3] = self.create_button('Home', 'lightyellow')
-        record_cb = widgets.Checkbox(value=False, description='Record', indent=False, layout=Layout(width='100px'))
-        record_cb.observe(self.checkbox_changed, names='value')
-        grid[0, 3:5] = record_cb
-        self._pos_buttons[0] = self.create_button('P1', 'lightgrey')
-        self._pos_buttons[1] = self.create_button('P2', 'lightgrey')
-        self._pos_buttons[2] = self.create_button('P3', 'lightgrey')
-        self._pos_buttons[3] = self.create_button('P4', 'lightgrey')
-        self._pos_buttons[4] = self.create_button('P5', 'lightgrey')
-        self._pos_buttons[5] = self.create_button('P6', 'lightgrey')
-        grid[1,3] = self._pos_buttons[0]
-        grid[1,4] = self._pos_buttons[1]
-        grid[2,3] = self._pos_buttons[2]
-        grid[2,4] = self._pos_buttons[3]
-        grid[3,3] = self._pos_buttons[4]
-        grid[3,4] = self._pos_buttons[5]
-        grid[4,3] = self.create_button('Save', 'pink')
-        grid[4,4] = self.create_button('Open', 'pink')
-        self.xys = 5
-        self.zs = 1
-        self.grid = grid
-        self.output = Output()
-        display (grid, self.output)
-
-class Enderlights(SerialDevice):
-    """
-    An illumination device built from an Arduino board and a neopixels RGB leds ring
-    """
-
-    def __init__(self, port, baud_rate=9600, parity=serial.PARITY_NONE,
-                 stop_bits=serial.STOPBITS_ONE, byte_size=serial.EIGHTBITS):
-        super().__init__(port, baud_rate, parity, stop_bits, byte_size)
-        
-    def write_code(self, code, check_ok=True, debug=False):
-        super().write_code(code)
-        response = self.serial.readline().decode('utf-8')
-        if not response.startswith("ok"):
-            print (response.strip('\n'))
-        return response
-
-    def shutter(self, s):
-        """
-        Opens or closes a virtual shutter
-        """
-        code = f"S0"
-        if s==True:
-            code = f"S1"
-        self.write_code(code)
-
-    def mode(self, value):
-        """
-        switches modes
-        """
-        code = f"M{value}"
-        self.write_code(code)
-
-    def parameter(self, value):
-        """
-        switches modes
-        """
-        code = f"P{value}"
-        self.write_code(code)
-
-    def red(self, value):
-        """
-        sets red level
-        """
-        code = f"R{value}"
-        self.write_code(code)
-
-    def green(self, value):
-        """
-        sets green level
-        """
-        code = f"G{value}"
-        self.write_code(code)
-
-    def blue(self, value):
-        """
-        sets green level
-        """
-        code = f"B{value}"
-        self.write_code(code)
-
-    def color(self, r,g,b):
-        """
-        sets rgb levels
-        """
-        self.red(r)
-        self.green(g)
-        self.blue(b)
-
-    def reset(self):
-        """
-        resets illuminator
-        """
-        self.shutter(False)
-        self.mode(0)
-        self.write_code(f"MA65535\n")
-        self.color(20,20,20)
-
-class ScanPatterns:
-    def plot_path(path = np.array([[0,0]]), labels=True, field = (10,10), title='Path preview'):
-        x=path[:, 0]
-        y=path[:, 1]
-        field = Rectangle((0,0),field[0],field[1])
-        rectangle = Rectangle((0,0), 200, 190,
-                          edgecolor='green', facecolor='#00ff0010', linewidth=1)
-        plt.gca().add_patch(rectangle)
-        plt.plot(x,y, marker='x')
-        plt.axis('equal')
-        ticks = np.arange(-50, 221, 25)
-        plt.xticks(ticks)
-        plt.yticks(ticks)
-        plt.grid(linestyle='--', linewidth=0.7, alpha=0.7)
-        plt.xlim(-10, 200)
-        plt.ylim(-10, 200)
-        plt.xlabel('x axis')
-        plt.ylabel('y axis')
-        plt.title(title)
-        if labels:
-            for idx, (x_pos, y_pos) in enumerate(zip(x, y)):
-                plt.text(x_pos, y_pos, str(idx+1), fontsize=10, color='gray', ha='right', va='bottom')
-                f = Rectangle((x_pos-field.get_width()/2,y_pos-field.get_height()/2),
-                              field.get_width(), field.get_height(),
-                              edgecolor='red', facecolor='none', linewidth=0.25
-                             )
-                plt.gca().add_patch(f)
-
-    def raster(cols=4, rows=3):
-        return np.array(list((x,y) for y in range(rows) for x in range(cols)))
-
-    def snake(cols=4, rows=3):
-        return np.array(
-            list((x,y)
-                 for y in range(rows)
-                 for x in range((cols-1)*(y%2),cols-(cols+1)*(y%2),((y+1)%2)-1*((y%2)))
-                ))
-
-    def random(num_points = 10, seed=1):
-        x_min, x_max = 0, 180  # Range for x values
-        y_min, y_max = 0, 180  # Range for y values
-        np.random.seed(seed)
-        return np.column_stack((
-            np.random.uniform(x_min, x_max, num_points),
-            np.random.uniform(y_min, y_max, num_points)))
-
-    def spiral(num_points = 50):    
-        directions = np.array([[1,0],[0,1],[-1,0],[0,-1]])
-        d = 0
-        i = 1 
-        p = np.array([0,0])
-        sp = np.array([p])
-        while len(sp)<num_points:
-            for j in range(i):
-                p=p+directions[d]
-                sp = np.append(sp,[p], axis=0)
-            d = (d+1)%4
-            i = i + (d%2==0)            
-        return np.array(sp[:num_points])

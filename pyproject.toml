@@ -1,0 +1,19 @@
+[project]
+name = "enderleaf"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "ipympl>=0.10.0",
+    "ipywidgets>=8.1.8",
+    "jupyter>=1.1.1",
+    "jupyter-bokeh>=4.0.5",
+    "jupyterlab>=4.5.6",
+    "matplotlib>=3.10.8",
+    "numpy>=2.2.6",
+    "opencv-python>=4.13.0.92",
+    "panel>=1.8.10",
+    "pyserial>=3.5",
+    "rich>=14.3.3",
+]
