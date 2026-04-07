@@ -8,7 +8,6 @@ For a Raspberry Pi 4 with Debian Bookworm OS (Released 2024-07-04):
 ```
 git clone -b enderleaf https://github.com/tr31zh/EnderLeaf.git
 cd EnderLeaf
-uv init --python "python==3.13"
 uv venv --system-site-packages
 uv sync
 ```
