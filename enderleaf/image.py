@@ -14,7 +14,7 @@ class Rectangle:
     right: int | None = None
 
     def __repr__(self):
-        return f"[left:[{self.left}]|right:[{self.right}]|top:[{self.top}]|bottom:[{self.bottom}]]"
+        return f"left:{self.left}|right:{self.right}|top:{self.top}|bottom:{self.bottom}"
 
     def empty(self) -> bool:
         return (
@@ -26,6 +26,22 @@ class Rectangle:
             or self.left >= self.right
         )
 
+    def shrink(self, new_width, new_height):
+        return self.__class__(
+            top=self.cy - new_height / 2, 
+            bottom=self.cy + new_height / 2, 
+            left=self.cx - new_width / 2, 
+            right=self.cx + new_width / 2
+        )
+
+    def ensure_int(self):
+        return self.__class__(
+            top=int(round(self.top)), 
+            bottom=int(round(self.bottom)), 
+            left=int(round(self.left)), 
+            right=int(round(self.right))
+        )
+
     @property
     def width(self):
         return self.right - self.left
@@ -33,6 +49,14 @@ class Rectangle:
     @property
     def height(self):
         return self.bottom - self.top
+
+    @property
+    def cx(self):
+        return self.left + self.width / 2
+
+    @property
+    def cy(self):
+        return self.top + self.height / 2
 
 
 def to_pil(image, size: tuple = None) -> Image:

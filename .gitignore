@@ -220,3 +220,5 @@ __marimo__/
 
 # My stuff
 qr_images
+*.png
+*.jpg
