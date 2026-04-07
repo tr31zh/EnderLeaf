@@ -2,22 +2,26 @@
 
 ### Installation
 
-For a Raspberry Pi 4 with Debian Bookworm OS (Released 2024-07-04):
-- Install uv https://docs.astral.sh/uv/getting-started/installation/
-
+#### For a Raspberry Pi 4 with Debian Bookworm OS (Released 2024-07-04):
 ```
 git clone -b enderleaf https://github.com/tr31zh/EnderLeaf.git
 cd EnderLeaf
-uv venv --system-site-packages
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+#### For any other system without picamera support
+Install uv https://docs.astral.sh/uv/getting-started/installation/
+```
+git clone -b enderleaf https://github.com/tr31zh/EnderLeaf.git
+cd EnderLeaf
+uv init
 uv sync
 ```
 
-Clone this repo and open the 'demo' notebook in JupyterLab. 
-
-
 ### Usage
 
-From the main folder
+From the demos folder
 ```
 uv run jupyter lab
 ```

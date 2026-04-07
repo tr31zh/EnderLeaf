@@ -27,9 +27,7 @@ def capture(
             pass
         case FocusMode.AUTO:
             pass
-    print(
-        f"Captured image with resolution: {resulution} using {focus_mode.value} focus mode with crop {str(crop_data)}"
-    )
+    return f"Captured image with resolution: {resulution} using {focus_mode.value} focus mode with crop {str(crop_data)}"
 
 
 def read_qr_code(image: np.array, crop_data: ei.Rectangle | None):
