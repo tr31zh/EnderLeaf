@@ -1,17 +1,16 @@
-## Enderscopy
+## EnderLeaf
 
 ### Installation
 
 For a Raspberry Pi 4 with Debian Bookworm OS (Released 2024-07-04):
-
-Create an 'enderscope' virtual environment to work in:
+- Install uv https://docs.astral.sh/uv/getting-started/installation/
 
 ```
-cd ~
-python3 -m venv --system-site-packages enderscope
-source enderscope/bin/activate
-pip install pyserial jupyter ipywidgets numpy matplotlib
-jupyter notebook
+git clone -b enderleaf https://github.com/tr31zh/EnderLeaf.git
+cd EnderLeaf
+uv init --python "python==3.13"
+uv venv --system-site-packages
+uv sync
 ```
 
 Clone this repo and open the 'demo' notebook in JupyterLab. 
@@ -19,10 +18,7 @@ Clone this repo and open the 'demo' notebook in JupyterLab.
 
 ### Usage
 
+From the main folder
 ```
-cd ~
-source enderscope/bin/activate
-jupyter notebook
+uv run jupyter lab
 ```
-### Next version
-Check the refactored next version in the dev branch.
