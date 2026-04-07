@@ -1,8 +1,39 @@
 from pathlib import Path
+from dataclasses import dataclass
 
 import numpy as np
 import cv2
 from PIL import Image
+
+
+@dataclass
+class Rectangle:
+    top: int | None = None
+    bottom: int | None = None
+    left: int | None = None
+    right: int | None = None
+
+    def __repr__(self):
+        return f"[left:[{self.left}]|right:[{self.right}]|top:[{self.top}]|bottom:[{self.bottom}]]"
+
+    def empty(self) -> bool:
+        return (
+            self.top is None
+            or self.bottom is None
+            or self.left is None
+            or self.right is None
+            or self.top >= self.bottom
+            or self.left >= self.right
+        )
+
+    @property
+    def width(self):
+        return self.right - self.left
+
+    @property
+    def height(self):
+        return self.bottom - self.top
+
 
 def to_pil(image, size: tuple = None) -> Image:
     """Converts image from OpenCV format to Pillow format
@@ -21,12 +52,32 @@ def to_pil(image, size: tuple = None) -> Image:
         ret = ret.resize(size=size, resample=Image.Resampling.LANCZOS)
     return ret
 
-def crop_image(image, crop_top=400, crop_bottom=400, crop_left=400, crop_right=400):
+
+def crop_image(image, crop_data: Rectangle = Rectangle()):
+    return (
+        image[crop_data.top : crop_data.bottom, crop_data.left : crop_data.right]
+        if crop_data.empty() is False
+        else image
+    )
+
+
+def crop_from_center(image, crop_data: Rectangle = Rectangle(400, 400, 400, 400)):
     height, width, _ = image.shape
     cy, cx = height // 2, width // 2
-    return image[cy - crop_top : cy + crop_bottom, cx - crop_left : cx + crop_right]
+    return crop_image(
+        image=image,
+        crop_data=Rectangle(
+            top=cy - crop_data.top,
+            bottom=cy + crop_data.bottom,
+            left=cx - crop_data.left,
+            right=cx + crop_data.right,
+        ),
+    )
 
-def load_image(image_path: Path, rgb: bool = True, image_size: int = None) -> np.ndarray:
+
+def load_image(
+    image_path: Path, rgb: bool = True, image_size: int = None
+) -> np.ndarray:
     try:
         image = cv2.imread(str(image_path))
         if rgb is True:

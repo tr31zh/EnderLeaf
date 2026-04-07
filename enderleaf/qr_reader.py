@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import cv2
 
-from enderscope.image import load_image
+from enderleaf.image import load_image
 
 
 def get_points_extremes(points):
@@ -23,7 +23,6 @@ def draw_qr_data(image, points, info):
 
 def get_qr_data(
     image_object: Path | str | np.ndarray,
-    size=2592,
     safe_pad=100,
     sharpen_image: bool = False,
     allow_self_code: bool = True,
@@ -31,7 +30,7 @@ def get_qr_data(
     image = (
         image_object
         if isinstance(image_object, np.ndarray) is True
-        else load_image(image_path=image_object, image_size=size)
+        else load_image(image_path=image_object)
     )
     if sharpen_image is True:
         image = cv2.filter2D(image, -1, np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]]))
@@ -50,7 +49,7 @@ def get_qr_data(
                     max_y + safe_pad,
                 )
                 cropped_ret_data = get_qr_data(
-                    image[min_y:max_y, min_x:max_x], size=None, allow_self_code=False
+                    image[min_y:max_y, min_x:max_x], allow_self_code=False
                 )
                 if cropped_ret_data["retval"]:
                     cropped_ret_data["points"][:, :, 0] += min_x
@@ -72,14 +71,10 @@ def get_qr_data(
 
 
 def get_qr_viz(
-    image_object: Path | str | np.ndarray,
-    size=2592,
-    safe_pad=100,
-    sharpen_image: bool = False,
+    image_object: Path | str | np.ndarray, safe_pad=100, sharpen_image: bool = False
 ):
     data = get_qr_data(
         image_object=image_object,
-        size=size,
         safe_pad=safe_pad,
         sharpen_image=sharpen_image,
     )
@@ -87,7 +82,7 @@ def get_qr_viz(
     image = (
         image_object
         if isinstance(image_object, np.ndarray) is True
-        else load_image(image_path=image_object, image_size=size)
+        else load_image(image_path=image_object)
     )
     if data["retval"]:
         for info, qr_points in zip(data["info"], data["points"]):
