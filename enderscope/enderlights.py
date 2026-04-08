@@ -1,6 +1,6 @@
 import serial
 
-from enderscope import SerialDevice
+from enderscope.serial import SerialDevice
 
 class Enderlights(SerialDevice):
     """

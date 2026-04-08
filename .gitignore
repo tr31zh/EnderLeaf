@@ -222,3 +222,4 @@ __marimo__/
 qr_images
 *.png
 *.jpg
+.virtual_documents
