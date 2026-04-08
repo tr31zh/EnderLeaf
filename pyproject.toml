@@ -5,14 +5,24 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "black>=26.3.1",
     "ipympl>=0.10.0",
     "ipywidgets>=8.1.8",
+    "jupyter-fs>=1.1.2",
     "jupyterlab>=4.5.6",
+    "jupyterlab-code-formatter>=3.0.3",
+    "jupyterlab-git>=0.52.0",
+    "jupyterlab-lsp>=5.3.0",
+    "jupyterlab-materialdarker>=0.8.0",
+    "jupyterlab-spellchecker>=0.8.4",
+    "lckr-jupyterlab-variableinspector>=3.2.4",
     "matplotlib>=3.10.8",
     "numpy>=2.4.4",
     "opencv-python>=4.13.0.92",
     "pandas>=3.0.2",
     "panel>=1.8.10",
     "pyserial>=3.5",
+    "python-lsp-server[all]>=1.14.0",
     "rich>=14.3.3",
+    "theme-darcula>=4.0.0",
 ]

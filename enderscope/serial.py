@@ -11,6 +11,7 @@ from typing import Optional, Dict, Tuple, List
 from time import sleep
 
 import serial
+from serial.tools.list_ports import comports
 
 from IPython.display import Image
 import matplotlib.pyplot as plt
@@ -717,6 +718,9 @@ class _VirtualMarlinDevice:
             for out in self._proto.handle(text):
                 self._backend.write((out + "\n").encode("utf-8"))
 
+
+def list_ports():
+    return comports()
 
 class SerialUtils:
 
