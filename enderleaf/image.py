@@ -14,7 +14,9 @@ class Rectangle:
     right: int | None = None
 
     def __repr__(self):
-        return f"left:{self.left}|right:{self.right}|top:{self.top}|bottom:{self.bottom}"
+        return (
+            f"left:{self.left}|right:{self.right}|top:{self.top}|bottom:{self.bottom}"
+        )
 
     def empty(self) -> bool:
         return (
@@ -28,18 +30,18 @@ class Rectangle:
 
     def shrink(self, new_width, new_height):
         return self.__class__(
-            top=self.cy - new_height / 2, 
-            bottom=self.cy + new_height / 2, 
-            left=self.cx - new_width / 2, 
-            right=self.cx + new_width / 2
+            top=self.cy - new_height / 2,
+            bottom=self.cy + new_height / 2,
+            left=self.cx - new_width / 2,
+            right=self.cx + new_width / 2,
         )
 
     def ensure_int(self):
         return self.__class__(
-            top=int(round(self.top)), 
-            bottom=int(round(self.bottom)), 
-            left=int(round(self.left)), 
-            right=int(round(self.right))
+            top=int(round(self.top)),
+            bottom=int(round(self.bottom)),
+            left=int(round(self.left)),
+            right=int(round(self.right)),
         )
 
     @property
@@ -78,11 +80,15 @@ def to_pil(image, size: tuple = None) -> Image:
 
 
 def crop_image(image, crop_data: Rectangle = Rectangle()):
-    return (
-        image[crop_data.top : crop_data.bottom, crop_data.left : crop_data.right]
-        if crop_data.empty() is False
-        else image
-    )
+    height, width, _ = image.shape
+    return image[
+        crop_data.top : (
+            crop_data.bottom if crop_data.bottom > 0 else height + crop_data.bottom
+        ),
+        crop_data.left : (
+            crop_data.right if crop_data.right > 0 else width + crop_data.right
+        ),
+    ]
 
 
 def crop_from_center(image, crop_data: Rectangle = Rectangle(400, 400, 400, 400)):

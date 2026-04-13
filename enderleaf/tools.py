@@ -1,3 +1,4 @@
+from pathlib import Path
 from timeit import default_timer as timer
 
 
@@ -34,3 +35,20 @@ def time_method(f):
         return x
 
     return new_function
+
+
+def ensure_folder(
+    forced_path: Path, return_string: bool = False
+) -> str | Path:
+    """Ensures that forced_path exists
+
+    Args:
+        forced_path (Path): Target path
+        return_string (bool, optional): If true return path to folder as string if not as Path. Defaults to False.
+
+    Returns:
+        str | Path: Path to created folder
+    """
+    if forced_path.is_dir() is False:
+        forced_path.mkdir(parents=True, exist_ok=True)
+    return str(forced_path) if return_string is True else forced_path
