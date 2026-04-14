@@ -29,6 +29,7 @@ class StillFolders(Enum):
     RAW = Path(".").joinpath("output", "raw")
     CROPPED = Path(".").joinpath("output", "cropped")
 
+
 class CameraStatus(Enum):
     STOPPED = "stopped"
     STILL = "still"
@@ -88,19 +89,14 @@ def update_panel(preview):
                     crop_image(
                         image=image,
                         crop_data=Rectangle(
-                            top=round(preview.crop_top / raw_height * main_height)
-                            & ~1,
+                            top=round(preview.crop_top / raw_height * main_height) & ~1,
                             bottom=-(
-                                round(
-                                    preview.crop_bottom / raw_height * main_height
-                                )
+                                round(preview.crop_bottom / raw_height * main_height)
                                 & ~1
                             ),
-                            left=round(preview.crop_left / raw_width * main_width)
-                            & ~1,
+                            left=round(preview.crop_left / raw_width * main_width) & ~1,
                             right=-(
-                                round(preview.crop_right / raw_width * main_width)
-                                & ~1
+                                round(preview.crop_right / raw_width * main_width) & ~1
                             ),
                         ),
                     )
@@ -318,7 +314,7 @@ class PreviewPane(param.Parameterized):
                     sizing_mode="stretch_width",
                     step=2,
                 ),
-                pn.Row(#do_capture_still()
+                pn.Row(  # do_capture_still()
                     pn.widgets.IntInput.from_param(
                         self.param.crop_left,
                         name="Left",
