@@ -109,8 +109,6 @@ def update_panel(preview):
         if preview.stop_event.is_set() is True or preview.output.closed is True:
             break
 
-    print("Exiting updated panel loop", flush=True)
-
 
 class PreviewPane(param.Parameterized):
     sensor_modes = param.Selector(default=2)
@@ -239,7 +237,10 @@ class PreviewPane(param.Parameterized):
                 )
                 self.camera.stop()
                 self.start_video()
-        return crop_image(image=image, crop_data=crop_data)
+        ret = crop_image(image=image, crop_data=crop_data)
+        if self.status == CameraStatus.STILL:
+            self.preview_pane.object = to_pil(ret)
+        return ret
 
     def do_capture_still(
         self,
@@ -262,8 +263,6 @@ class PreviewPane(param.Parameterized):
                 dt.now().strftime("%Y%m%d%H%M%S")
             ).with_suffix(".jpg")
         )
-        if self.status == CameraStatus.STILL:
-            self.preview_pane.object = image
 
     @param.depends("capture_cropped_still", watch=True)
     def on_capture_cropped_still(self):
@@ -281,8 +280,6 @@ class PreviewPane(param.Parameterized):
                 dt.now().strftime("%Y%m%d%H%M%S")
             ).with_suffix(".jpg")
         )
-        if self.status == CameraStatus.STILL:
-            self.preview_pane.object = image
 
     def sidebar(self):
         return pn.Column(

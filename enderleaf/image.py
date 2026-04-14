@@ -121,3 +121,8 @@ def load_image(
         print(image_path)
         print(f"Failed load image: {str(e)}")
         return None
+
+def lap_var(img):
+    laplacian = cv2.Laplacian(img, cv2.CV_32F)
+    variance = laplacian.var()
+    return variance
