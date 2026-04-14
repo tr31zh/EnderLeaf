@@ -1,6 +1,6 @@
 from pathlib import Path
 import io
-from threading import Thread, Condition
+from threading import Thread, Condition, Event
 from functools import wraps
 from datetime import datetime as dt
 from enum import Enum
@@ -22,10 +22,17 @@ import panel as pn
 from enderleaf.tools import ensure_folder
 from enderleaf.image import to_pil, crop_image, Rectangle
 
+pn.extension("ace", "jsoneditor")
+
 
 class StillFolders(Enum):
     RAW = Path(".").joinpath("output", "raw")
     CROPPED = Path(".").joinpath("output", "cropped")
+
+class CameraStatus(Enum):
+    STOPPED = "stopped"
+    STILL = "still"
+    VIDEO = "video"
 
 
 def working(method):
@@ -57,68 +64,69 @@ def update_panel(preview):
     while True:
         with preview.output.condition:
             preview.output.condition.wait()
-            if preview._working is True:
-                continue
-            preview._working = True
-            try:
-                if (
-                    preview.crop_top == 0
-                    and preview.crop_bottom == 0
-                    and preview.crop_left == 0
-                    and preview.crop_right == 0
-                ):
-                    preview.preview_pane.object = preview.output.frame
-                else:
-                    image = cv2.imdecode(
-                        np.frombuffer(preview.output.frame, np.uint8), cv2.IMREAD_COLOR
-                    )
-                    cam_conf = preview.camera.camera_config
-                    main_width, main_height = (
-                        cam_conf["main"]["size"][0],
-                        cam_conf["main"]["size"][1],
-                    )
-                    raw_width, raw_height = (
-                        cam_conf["raw"]["size"][0],
-                        cam_conf["raw"]["size"][1],
-                    )
-                    preview.preview_pane.object = to_pil(
-                        crop_image(
-                            image=image,
-                            crop_data=Rectangle(
-                                top=round(preview.crop_top / raw_height * main_height)
-                                & ~1,
-                                bottom=-(
-                                    round(
-                                        preview.crop_bottom / raw_height * main_height
-                                    )
-                                    & ~1
-                                ),
-                                left=round(preview.crop_left / raw_width * main_width)
-                                & ~1,
-                                right=-(
-                                    round(preview.crop_right / raw_width * main_width)
-                                    & ~1
-                                ),
+            if (
+                preview.crop_top == 0
+                and preview.crop_bottom == 0
+                and preview.crop_left == 0
+                and preview.crop_right == 0
+            ):
+                preview.preview_pane.object = preview.output.frame
+            else:
+                image = cv2.imdecode(
+                    np.frombuffer(preview.output.frame, np.uint8), cv2.IMREAD_COLOR
+                )
+                cam_conf = preview.camera.camera_config
+                main_width, main_height = (
+                    cam_conf["main"]["size"][0],
+                    cam_conf["main"]["size"][1],
+                )
+                raw_width, raw_height = (
+                    cam_conf["raw"]["size"][0],
+                    cam_conf["raw"]["size"][1],
+                )
+                preview.preview_pane.object = to_pil(
+                    crop_image(
+                        image=image,
+                        crop_data=Rectangle(
+                            top=round(preview.crop_top / raw_height * main_height)
+                            & ~1,
+                            bottom=-(
+                                round(
+                                    preview.crop_bottom / raw_height * main_height
+                                )
+                                & ~1
                             ),
-                        )
+                            left=round(preview.crop_left / raw_width * main_width)
+                            & ~1,
+                            right=-(
+                                round(preview.crop_right / raw_width * main_width)
+                                & ~1
+                            ),
+                        ),
                     )
-            except Exception as e:
-                pass
-            finally:
-                preview._working = False
+                )
 
-        if preview.output.closed:
+        if preview.stop_event.is_set() is True or preview.output.closed is True:
             break
+
+    print("Exiting updated panel loop", flush=True)
 
 
 class PreviewPane(param.Parameterized):
-    sensor_modes = param.Selector()
+    sensor_modes = param.Selector(default=2)
     capture_still = param.Action(
         default=lambda x: x.param.trigger("capture_still"), label="Capture still"
     )
     capture_cropped_still = param.Action(
         default=lambda x: x.param.trigger("capture_cropped_still"),
         label="Capture cropped still",
+    )
+
+    preview_start = param.Action(
+        default=lambda x: x.param.trigger("preview_start"), label="Start"
+    )
+    preview_stop = param.Action(
+        default=lambda x: x.param.trigger("preview_stop"), label="Stop"
     )
 
     crop_left = param.Integer(0)
@@ -145,8 +153,9 @@ class PreviewPane(param.Parameterized):
     def __init__(self, **params):
         super().__init__(**params)
         self._working = False
-        self.started = False
-        self.output = StreamingOutput()
+        self.status = CameraStatus.STOPPED
+        self.stop_event = Event()
+        self.output = None
         self.camera = Picamera2()
         self.preview_pane = pn.pane.Placeholder(
             "Preview",
@@ -170,7 +179,6 @@ class PreviewPane(param.Parameterized):
             :2
         ]
 
-    @working
     def set_crop(self, left, right, top, bottom):
         self.crop_left = left
         self.crop_right = right
@@ -178,7 +186,6 @@ class PreviewPane(param.Parameterized):
         self.crop_bottom = bottom
 
     @param.depends("sensor_modes", watch=True)
-    @working
     def on_sensor_mode_changed(self):
         self.camera.stop_recording()
         new_mode = self.camera.sensor_modes[self.sensor_modes]
@@ -186,19 +193,24 @@ class PreviewPane(param.Parameterized):
         self.camera.start_recording(JpegEncoder(), FileOutput(self.output))
 
     @param.depends("focus_mode", watch=True)
-    @working
     def on_focus_mode_changed(self):
         self.camera.set_controls({"AfMode": self.focus_mode})
 
     @param.depends("focus_distance", watch=True)
-    @working
     def on_focus_distance_changed(self):
         self.camera.set_controls({"LensPosition": self.focus_distance})
 
     @param.depends("do_focus", watch=True)
-    @working
     def on_request_focus(self):
         self.camera.autofocus_cycle()
+
+    @param.depends("preview_start", watch=True)
+    def on_preview_start(self):
+        self.start_video()
+
+    @param.depends("preview_stop", watch=True)
+    def on_preview_stop(self):
+        self.stop_video()
 
     def do_capture_array(
         self,
@@ -206,23 +218,27 @@ class PreviewPane(param.Parameterized):
         focus_cycle: bool = False,
         sleep_time: float = 0,
     ):
-        if self.started is True:
-            if focus_cycle is True:
-                self.camera.autofocus_cycle()
-            image = self.camera.switch_mode_and_capture_array(
-                self.camera.create_still_configuration(), "main"
-            )
-        else:
-            self.camera.start(show_preview=False)
-            if sleep_time > 0:
-                time.sleep(sleep_time)
-            if focus_cycle is True:
-                self.camera.autofocus_cycle()
-            image = self.camera.switch_mode_and_capture_array(
-                self.camera.create_still_configuration(), "main"
-            )
-            self.camera.stop()
-
+        match self.status:
+            case CameraStatus.STOPPED:
+                print("Camera stopped, please start", flush=True)
+                return None
+            case CameraStatus.STILL:
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                if focus_cycle is True:
+                    self.camera.autofocus_cycle()
+                image = self.camera.switch_mode_and_capture_array(
+                    self.camera.create_still_configuration(), "main"
+                )
+            case CameraStatus.VIDEO:
+                if focus_cycle is True:
+                    self.camera.autofocus_cycle()
+                self.stop_video()
+                image = self.camera.switch_mode_and_capture_array(
+                    self.camera.create_still_configuration(), "main"
+                )
+                self.camera.stop()
+                self.start_video()
         return crop_image(image=image, crop_data=crop_data)
 
     def do_capture_still(
@@ -238,31 +254,35 @@ class PreviewPane(param.Parameterized):
         )
 
     @param.depends("capture_still", watch=True)
-    @working
     def on_capture_still(self):
         ensure_folder(StillFolders.RAW.value)
-        self.do_capture_still().save(
+        image = self.do_capture_still()
+        image.save(
             StillFolders.RAW.value.joinpath(
                 dt.now().strftime("%Y%m%d%H%M%S")
             ).with_suffix(".jpg")
         )
+        if self.status == CameraStatus.STILL:
+            self.preview_pane.object = image
 
     @param.depends("capture_cropped_still", watch=True)
-    @working
     def on_capture_cropped_still(self):
         ensure_folder(StillFolders.CROPPED.value)
-        self.do_capture_still(
+        image = self.do_capture_still(
             crop_data=Rectangle(
                 left=self.crop_left,
                 top=self.crop_top,
                 right=-self.crop_right,
                 bottom=-self.crop_bottom,
             )
-        ).save(
+        )
+        image.save(
             StillFolders.CROPPED.value.joinpath(
                 dt.now().strftime("%Y%m%d%H%M%S")
             ).with_suffix(".jpg")
         )
+        if self.status == CameraStatus.STILL:
+            self.preview_pane.object = image
 
     def sidebar(self):
         return pn.Column(
@@ -283,6 +303,14 @@ class PreviewPane(param.Parameterized):
                     name="Capture cropped still",
                     sizing_mode="stretch_width",
                 ),
+                pn.Row(
+                    pn.widgets.Button.from_param(
+                        self.param.preview_start, sizing_mode="stretch_width"
+                    ),
+                    pn.widgets.Button.from_param(
+                        self.param.preview_stop, sizing_mode="stretch_width"
+                    ),
+                ),
             ),
             pn.WidgetBox(
                 "### Crop data",
@@ -293,7 +321,7 @@ class PreviewPane(param.Parameterized):
                     sizing_mode="stretch_width",
                     step=2,
                 ),
-                pn.Row(
+                pn.Row(#do_capture_still()
                     pn.widgets.IntInput.from_param(
                         self.param.crop_left,
                         name="Left",
@@ -348,30 +376,46 @@ class PreviewPane(param.Parameterized):
         )
 
     @working
-    def start(self):
-        self.started = True
-        mode = self.camera.sensor_modes[0]
+    def start_still(self):
+        if self.status == CameraStatus.VIDEO:
+            self.stop_video()
+        self.camera.start(show_preview=False)
+        self.status = CameraStatus.STILL
+
+    @working
+    def stop_still(self):
+        self.camera.stop()
+        self.status = CameraStatus.STOPPED
+
+    @working
+    def start_video(self):
+        if self.status == CameraStatus.STILL:
+            self.stop_still()
+        self.status = CameraStatus.VIDEO
+        self.stop_event.clear()
+        mode = self.camera.sensor_modes[self.sensor_modes]
         self.camera.configure(
             self.camera.create_video_configuration(
                 raw=mode, main={"preserve_ar": False}
             )
         )
+        self.output = StreamingOutput()
         self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
         self.camera.start_recording(JpegEncoder(), FileOutput(self.output))
         self.thread = Thread(target=update_panel, args=(self,))
         self.thread.start()
 
-    def stop(self):
+    @working
+    def stop_video(self):
+        self.stop_event.set()
+        self.thread.join()
         self.camera.stop_recording()
-        self.started = False
+        self.output.close()
+        self.camera.stop()
+        self.status = CameraStatus.STOPPED
 
     def show(self):
         return pn.Row(self.sidebar(), self.main())
-
-    def close(self):
-        self.stop()
-        self.output.close()
-        self.thread.join()
 
 
 _preview = None
