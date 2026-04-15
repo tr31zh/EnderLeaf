@@ -62,7 +62,7 @@ def get_qr_data(
             else:
                 point_data.append(qr_points)
                 info_data.append(info)
-                image = draw_qr_data(image=image, points=qr_points, info=info)
+                # image = draw_qr_data(image=image, points=qr_points, info=info)
     return {
         "retval": retval,
         "info": info_data,

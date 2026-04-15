@@ -5,14 +5,14 @@ import board
 import neopixel
 
 PIN = board.D18
-LED_COUNT = 16
+LED_COUNT = 12
 
 
 class CardPoint(Enum):
-    NORTH = (0, 3)
-    EAST = (4, 7)
-    SOUTH = (8, 11)
-    WEST = (12, 15)
+    NORTH = (0, LED_COUNT // 4 - 1)
+    EAST = (LED_COUNT // 4, LED_COUNT // 2 - 1)
+    SOUTH = (LED_COUNT // 2, LED_COUNT // 4 * 3 - 1)
+    WEST = (LED_COUNT // 4 * 3, LED_COUNT - 1)
 
 
 class Enderlights:

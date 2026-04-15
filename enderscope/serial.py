@@ -9,6 +9,7 @@ import io
 import warnings
 from typing import Optional, Dict, Tuple, List
 from time import sleep
+from timeit import default_timer as timer
 
 import serial
 from serial.tools.list_ports import comports
@@ -1020,6 +1021,12 @@ class Stage(SerialDevice):
 
     def home(self, debug=False):
         self.write_code(G_CODES["homing"], debug=debug)
+
+    def safe_home(self, debug=False):
+        before = timer()
+        self.home(debug=debug)
+        after = timer()
+        return after - before > 2
 
     def finish_moves(self, debug=False):
         self.write_code(G_CODES["finish"], debug=debug)

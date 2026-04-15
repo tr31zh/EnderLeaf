@@ -1,5 +1,6 @@
 from pathlib import Path
 from timeit import default_timer as timer
+from datetime import datetime as dt
 
 
 def format_time(seconds):
@@ -37,9 +38,11 @@ def time_method(f):
     return new_function
 
 
-def ensure_folder(
-    forced_path: Path, return_string: bool = False
-) -> str | Path:
+def format_datetime(t=dt.now()):
+    return t.strftime("%Y%m%d%H%M%S")
+
+
+def ensure_folder(forced_path: Path, return_string: bool = False) -> str | Path:
     """Ensures that forced_path exists
 
     Args:

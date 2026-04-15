@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import cv2
-from PIL import Image
+from PIL import Image, ImageOps
 
 
 @dataclass
@@ -104,6 +104,9 @@ def crop_from_center(image, crop_data: Rectangle = Rectangle(400, 400, 400, 400)
         ),
     )
 
+
+def safe_pil_resize(image: Image, new_width, new_height):
+    return ImageOps.contain(image=image, size=(new_width, new_height))
 
 def load_image(
     image_path: Path, rgb: bool = True, image_size: int = None
