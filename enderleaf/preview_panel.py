@@ -44,6 +44,12 @@ class CameraStatus(Enum):
     VIDEO = "video"
 
 
+class CropMode(Enum):
+    CROP = "Cropped image"
+    LINES = "Crop lines"
+    IGNORE = "Ignore"
+
+
 def working(method):
     @wraps(method)
     def _impl(self, *method_args, **method_kwargs):
@@ -54,6 +60,16 @@ def working(method):
             return method(self, *method_args, **method_kwargs)
         finally:
             self._working = False
+
+    return _impl
+
+
+def update_still_preview(method):
+    @wraps(method)
+    def _impl(self, *method_args, **method_kwargs):
+        result = method(self, *method_args, **method_kwargs)
+        self.still_update_preview()
+        return result
 
     return _impl
 
@@ -79,35 +95,26 @@ def update_panel(preview):
                 ),
                 cv2.COLOR_BGR2RGB,
             )
-            if (
-                preview.crop_top != 0
-                or preview.crop_bottom != 0
-                or preview.crop_left != 0
-                or preview.crop_right != 0
-            ):
-                cam_conf = preview.camera.camera_config
-                main_width, main_height = (
-                    cam_conf["main"]["size"][0],
-                    cam_conf["main"]["size"][1],
-                )
-                raw_width, raw_height = (
-                    cam_conf["raw"]["size"][0],
-                    cam_conf["raw"]["size"][1],
-                )
-                image = crop_image(
-                    image=image,
-                    crop_data=Rectangle(
-                        top=round(preview.crop_top / raw_height * main_height) & ~1,
-                        bottom=-(
-                            round(preview.crop_bottom / raw_height * main_height) & ~1
-                        ),
-                        left=round(preview.crop_left / raw_width * main_width) & ~1,
-                        right=-(
-                            round(preview.crop_right / raw_width * main_width) & ~1
-                        ),
-                    ),
-                )
-            preview.update_preview(to_pil(image))
+            cam_conf = preview.camera.camera_config
+            main_width, main_height = (
+                cam_conf["main"]["size"][0],
+                cam_conf["main"]["size"][1],
+            )
+            raw_width, raw_height = (
+                cam_conf["raw"]["size"][0],
+                cam_conf["raw"]["size"][1],
+            )
+            preview.update_preview(
+                image=image,
+                crop_data=Rectangle(
+                    top=round(preview.crop_top / raw_height * main_height) & ~1,
+                    bottom=main_height
+                    - (round(preview.crop_bottom / raw_height * main_height) & ~1),
+                    left=round(preview.crop_left / raw_width * main_width) & ~1,
+                    right=main_width
+                    - (round(preview.crop_right / raw_width * main_width) & ~1),
+                ),
+            )
 
         if preview.stop_event.is_set() is True or preview.output.closed is True:
             break
@@ -117,10 +124,6 @@ class PreviewPane(param.Parameterized):
     sensor_modes = param.Selector(default=2)
     act_capture_still = param.Action(
         default=lambda x: x.param.trigger("act_capture_still"), label="Capture still"
-    )
-    act_capture_cropped_still = param.Action(
-        default=lambda x: x.param.trigger("act_capture_cropped_still"),
-        label="Capture cropped still",
     )
 
     act_preview_start_video = param.Action(
@@ -139,6 +142,11 @@ class PreviewPane(param.Parameterized):
     crop_right = param.Integer(0)
     crop_top = param.Integer(0)
     crop_bottom = param.Integer(0)
+    crop_mode = param.Selector(
+        objects=[c.value for c in [CropMode.CROP, CropMode.LINES, CropMode.IGNORE]],
+        default=CropMode.LINES.value,
+        label="Crop mode",
+    )
 
     focus_mode = param.Selector(
         default=controls.AfModeEnum.Manual.value,
@@ -198,26 +206,91 @@ class PreviewPane(param.Parameterized):
             objects=[], title="Thumbnail", collapsed=True
         )
         self.crd_preview = pn.layout.Card(objects=[], title="Preview")
-        self.crd_crop_data = pn.layout.Card(objects=[], title="Crop data")
+        self.crd_crop_data = pn.layout.Card(objects=[], title="Crop")
         self.crd_focus = pn.layout.Card(objects=[], title="Focus options")
+        self._counter = 0
+        self._debugger = pn.pane.Placeholder("Debugger", sizing_mode="stretch_width")
+        self._debug_counter = pn.pane.Placeholder(
+            "Debug counter", sizing_mode="stretch_width"
+        )
 
-    def update_preview(self, new_object):
-        self.preview_pane.object = new_object
-        if self.crd_thumbnail.collapsed is False:
-            self.thumbnail_pane.object = safe_pil_resize(
-                image=new_object,
-                new_height=self._sidebar_width,
-                new_width=self._sidebar_width,
+    def update_preview(self, image, crop_data: Rectangle | None = None):
+        try:
+            crop_data = (
+                Rectangle(
+                    top=self.crop_top,
+                    bottom=image.shape[0] - self.crop_bottom,
+                    left=self.crop_left,
+                    right=image.shape[1] - self.crop_right,
+                )
+                if crop_data is None
+                else crop_data
             )
+            if (
+                crop_data.top != 0
+                or crop_data.bottom != 0
+                or crop_data.left != 0
+                or crop_data.right != 0
+            ) and self.crop_mode != CropMode.IGNORE:
+                match self.crop_mode:
+                    case CropMode.CROP.value:
+                        image = crop_image(image=image, crop_data=crop_data)
+                    case CropMode.LINES.value:
+                        foreground = crop_image(image=image, crop_data=crop_data)
+                        image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+                        image = cv2.merge([image, image, image])
+                        image[
+                            crop_data.top : crop_data.bottom,
+                            crop_data.left : crop_data.right,
+                        ] = foreground
+                        image = crop_data.to_cv(
+                            image=image, color=(255, 0, 255), thickness=4
+                        )
+
+            preview_object = to_pil(image)
+        except Exception as e:
+            self.update_debugger({"error": str(e), "crop_data": str(crop_data)})
+        else:
+            match self.status:
+                case CameraStatus.STOPPED:
+                    pass
+                case CameraStatus.STILL:
+                    self.preview_pane.object = safe_pil_resize(
+                        image=preview_object, new_height=768, new_width=1024
+                    )
+                case CameraStatus.VIDEO:
+                    self._counter += 1
+                    self.preview_pane.object = preview_object
+            if self.crd_thumbnail.collapsed is False:
+                self.thumbnail_pane.object = safe_pil_resize(
+                    image=preview_object,
+                    new_height=self._sidebar_width,
+                    new_width=self._sidebar_width,
+                )
+
+    def update_debugger(self, data):
+        self._counter += 1
+        self._debugger.object = data
+        self._debug_counter.object = self._counter
+
+    def still_update_preview(self):
+        if self.status == CameraStatus.STILL:
+            self.do_capture_array()
 
     def set_crop(self, left, right, top, bottom):
         self.crop_left = left
         self.crop_right = right
         self.crop_top = top
         self.crop_bottom = bottom
-        # if self.status == CameraStatus.STILL:
-        #     self.do_capture_array(apply_crop=True)
 
+    @update_still_preview
+    @param.depends(
+        "crop_left", "crop_right", "crop_top", "crop_bottom", "crop_mode", watch=True
+    )
+    def on_crop_changed(self):
+        pass
+
+    @update_still_preview
     @param.depends("sensor_modes", watch=True)
     def on_sensor_mode_changed(self):
         self.camera.stop_recording()
@@ -226,39 +299,36 @@ class PreviewPane(param.Parameterized):
         self.camera.start_recording(JpegEncoder(), FileOutput(self.output))
 
     @working
+    @update_still_preview
     @param.depends("focus_mode", watch=True)
     def on_focus_mode_changed(self):
         self.camera.set_controls({"AfMode": self.focus_mode})
 
     @working
+    @update_still_preview
     @param.depends("focus_distance", watch=True)
     def on_focus_distance_changed(self):
         self.camera.set_controls({"LensPosition": self.focus_distance})
-        # if self.status == CameraStatus.STILL:
-        #     self.do_capture_array(apply_crop=True)
 
     @working
+    @update_still_preview
     @param.depends("act_focus", watch=True)
     def on_request_focus(self):
         self.camera.autofocus_cycle()
-        # if self.status == CameraStatus.STILL:
-        #     self.do_capture_array(apply_crop=True)
 
+    @update_still_preview
     @working
     @param.depends("act_focus_close", watch=True)
     def on_request_focus_close(self):
         self.camera.set_controls(
             {"LensPosition": self.camera.camera_controls["LensPosition"][1]}
         )
-        # if self.status == CameraStatus.STILL:
-        #     self.do_capture_array(apply_crop=True)
 
+    @update_still_preview
     @working
     @param.depends("act_focus_far", watch=True)
     def on_request_focus_far(self):
         self.camera.set_controls({"LensPosition": 0})
-        # if self.status == CameraStatus.STILL:
-        #     self.do_capture_array(apply_crop=True)
 
     @param.depends("act_preview_start_video", watch=True)
     def on_preview_start_video(self):
@@ -272,9 +342,7 @@ class PreviewPane(param.Parameterized):
     def on_preview_stop(self):
         self.stop()
 
-    def do_capture_array(
-        self, apply_crop: bool = False, crop_data=Rectangle(0, 0, 0, 0)
-    ):
+    def do_capture_array(self):
         match self.status:
             case CameraStatus.STOPPED:
                 print("Camera stopped, please start", flush=True)
@@ -290,50 +358,24 @@ class PreviewPane(param.Parameterized):
                 )
                 self.camera.stop()
                 self.start_video()
-        if apply_crop is True:
-            ret = crop_image(
-                image=image,
-                crop_data=Rectangle(
-                    left=self.crop_left,
-                    top=self.crop_top,
-                    right=-self.crop_right,
-                    bottom=-self.crop_bottom,
-                ),
-            )
-        else:
-            ret = crop_image(image=image, crop_data=crop_data)
+
         if self.status == CameraStatus.STILL:
-            self.update_preview(
-                safe_pil_resize(to_pil(ret), new_height=600, new_width=600)
-            )
-        return ret
-
-    def do_capture_still(self, crop_data=Rectangle(0, 0, 0, 0)):
-        return to_pil(self.do_capture_array(crop_data=crop_data))
-
-    @param.depends("act_capture_still", watch=True)
-    def on_capture_still(self):
-        ensure_folder(StillFolders.RAW.value)
-        image = self.do_capture_still()
-        image.save(
-            StillFolders.RAW.value.joinpath(
-                dt.now().strftime("%Y%m%d%H%M%S")
-            ).with_suffix(".jpg")
-        )
-
-    @param.depends("act_capture_cropped_still", watch=True)
-    def on_capture_cropped_still(self):
-        ensure_folder(StillFolders.CROPPED.value)
-        image = self.do_capture_still(
+            self.update_preview(image)
+        return crop_image(
+            image=image,
             crop_data=Rectangle(
                 left=self.crop_left,
                 top=self.crop_top,
                 right=-self.crop_right,
                 bottom=-self.crop_bottom,
-            )
+            ),
         )
-        image.save(
-            StillFolders.CROPPED.value.joinpath(
+
+    @param.depends("act_capture_still", watch=True)
+    def on_capture_still(self):
+        ensure_folder(StillFolders.RAW.value)
+        to_pil(self.do_capture_array()).save(
+            StillFolders.RAW.value.joinpath(
                 dt.now().strftime("%Y%m%d%H%M%S")
             ).with_suffix(".jpg")
         )
@@ -348,20 +390,13 @@ class PreviewPane(param.Parameterized):
                 return self.crd_thumbnail
             case Cards.PREVIEW:
                 self.crd_preview.objects = [
-                    pn.widgets.Select.from_param(
-                        self.param.sensor_modes,
-                        name="Sensor mode",
-                        sizing_mode="stretch_width",
-                    ),
+                    # pn.widgets.Select.from_param(
+                    #     self.param.sensor_modes,
+                    #     name="Sensor mode",
+                    #     sizing_mode="stretch_width",
+                    # ),
                     pn.widgets.Button.from_param(
-                        self.param.act_capture_still,
-                        name="Capture raw still",
-                        sizing_mode="stretch_width",
-                    ),
-                    pn.widgets.Button.from_param(
-                        self.param.act_capture_cropped_still,
-                        name="Capture cropped still",
-                        sizing_mode="stretch_width",
+                        self.param.act_capture_still, sizing_mode="stretch_width"
                     ),
                     pn.Row(
                         pn.widgets.Button.from_param(
@@ -387,7 +422,7 @@ class PreviewPane(param.Parameterized):
                         sizing_mode="stretch_width",
                         step=2,
                     ),
-                    pn.Row(  # do_capture_still()
+                    pn.Row(
                         pn.widgets.IntInput.from_param(
                             self.param.crop_left,
                             name="Left",
@@ -407,6 +442,9 @@ class PreviewPane(param.Parameterized):
                         align="center",
                         sizing_mode="stretch_width",
                         step=2,
+                    ),
+                    pn.widgets.Select.from_param(
+                        self.param.crop_mode, sizing_mode="stretch_width"
                     ),
                 ]
                 return self.crd_crop_data
@@ -456,6 +494,7 @@ class PreviewPane(param.Parameterized):
                     active=[0],
                 ),
             ),
+            ("Debugger", pn.Column(self._debug_counter, self._debugger)),
             active=0,
         )
 
@@ -465,12 +504,13 @@ class PreviewPane(param.Parameterized):
         return pn.Row(sidebar, self.main())
 
     @working
+    @update_still_preview
     def start_still(self):
         if self.status in [CameraStatus.STILL, CameraStatus.VIDEO]:
             self.stop()
         self.camera.start(show_preview=False)
+        time.sleep(0.5)
         self.status = CameraStatus.STILL
-        self.do_capture_array(apply_crop=True)
 
     @working
     def start_video(self):
