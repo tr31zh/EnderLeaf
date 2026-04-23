@@ -20,10 +20,14 @@ from libcamera import controls
 import param
 import panel as pn
 
+from enderscope.serial import list_ports, default_printer_port, Stage
+from enderscope.enderlights_pi import Enderlights
+from enderscope.bed import bed
 from enderleaf.tools import ensure_folder
-from enderleaf.image import to_pil, safe_pil_resize, crop_image, Rectangle
+from enderleaf.image import to_pil, safe_pil_resize, crop_image, Rectangle, lap_var
+from enderleaf.qr_reader import get_qr_data, get_points_extremes
 
-pn.extension("ace", "jsoneditor", "terminal", console_output="disable")
+pn.extension("ace", "jsoneditor")
 
 
 class StillFolders(Enum):
@@ -31,17 +35,12 @@ class StillFolders(Enum):
     CROPPED = Path(".").joinpath("output", "cropped")
 
 
-class Cards(Enum):
-    THUMBNAIL = "thumbnail"
-    PREVIEW = "preview"
-    CROP_DATA = "crop_data"
-    FOCUS = "focus"
-
-
-class CameraStatus(Enum):
-    STOPPED = "stopped"
-    STILL = "still"
-    VIDEO = "video"
+class SideBarCards(Enum):
+    PREVIEW = "Preview"
+    CROP_DATA = "Crop"
+    FOCUS = "Focus options"
+    INIT = "Initialize"
+    MOVE = "Move"
 
 
 class CropMode(Enum):
@@ -64,12 +63,14 @@ def working(method):
     return _impl
 
 
-def update_still_preview(method):
+def printer_busy(method):
     @wraps(method)
     def _impl(self, *method_args, **method_kwargs):
-        result = method(self, *method_args, **method_kwargs)
-        self.still_update_preview()
-        return result
+        self.lock_printer()
+        try:
+            return method(self, *method_args, **method_kwargs)
+        finally:
+            self.unlock_printer()
 
     return _impl
 
@@ -121,21 +122,10 @@ def update_panel(preview):
 
 
 class PreviewPane(param.Parameterized):
+    # Camera
     sensor_modes = param.Selector(default=2)
     act_capture_still = param.Action(
         default=lambda x: x.param.trigger("act_capture_still"), label="Capture still"
-    )
-
-    act_preview_start_video = param.Action(
-        default=lambda x: x.param.trigger("act_preview_start_video"),
-        label="Start video",
-    )
-    act_preview_start_still = param.Action(
-        default=lambda x: x.param.trigger("act_preview_start_still"),
-        label="Start still",
-    )
-    act_preview_stop = param.Action(
-        default=lambda x: x.param.trigger("act_preview_stop"), label="Stop"
     )
 
     crop_left = param.Integer(0)
@@ -170,22 +160,36 @@ class PreviewPane(param.Parameterized):
     )
     focus_distance = param.Number()
 
+    # Printer
+    act_home = param.Action(default=lambda x: x.param.trigger("act_home"), label="Home")
+    act_rest = param.Action(default=lambda x: x.param.trigger("act_rest"), label="Rest")
+    act_center_on_qr_code = param.Action(
+        default=lambda x: x.param.trigger("act_center_on_qr_code"), label="Find QR code"
+    )
+    act_connect_printer = param.Action(
+        default=lambda x: x.param.trigger("act_connect_printer"),
+        label="Connect printer",
+    )
+    act_connect_lights = param.Action(
+        default=lambda x: x.param.trigger("act_connect_lights"), label="Connect lights"
+    )
+    sel_printer = param.Selector(
+        objects=[str(p) for p in list_ports()],
+        default=str(default_printer_port()),
+        label="Select serial connection",
+    )
+
     def __init__(self, **params):
         super().__init__(**params)
         self._working = False
         self._sidebar_width = 300
-        self.status = CameraStatus.STOPPED
+        # Camera
+        self._started = False
         self.stop_event = Event()
         self.output = None
         self.camera = Picamera2()
-        self.preview_pane = pn.pane.Placeholder(
-            "Preview",
-            sizing_mode="stretch_width",
-        )
-        self.thumbnail_pane = pn.pane.Placeholder(
-            "Thumbnai",
-            sizing_mode="stretch_width",
-        )
+        self.video_pane = pn.pane.Image(sizing_mode="stretch_width")
+        # self.still_pane = pn.pane.Image(sizing_mode="stretch_width")
         self.camera_config = pn.pane.JSON(
             object=None, name="Camera configuration", depth=-1
         )
@@ -202,19 +206,47 @@ class PreviewPane(param.Parameterized):
         self.param.focus_distance.bounds = self.camera.camera_controls["LensPosition"][
             :2
         ]
-        self.crd_thumbnail = pn.layout.Card(
-            objects=[], title="Thumbnail", collapsed=True
+        self.crd_preview = pn.layout.Card(
+            objects=[], title=SideBarCards.PREVIEW.value, collapsed=True
         )
-        self.crd_preview = pn.layout.Card(objects=[], title="Preview")
-        self.crd_crop_data = pn.layout.Card(objects=[], title="Crop")
-        self.crd_focus = pn.layout.Card(objects=[], title="Focus options")
+        self.crd_crop_data = pn.layout.Card(
+            objects=[], title=SideBarCards.CROP_DATA.value, collapsed=True
+        )
+        self.crd_focus = pn.layout.Card(
+            objects=[], title=SideBarCards.FOCUS.value, collapsed=True
+        )
+
+        # Printer
+        self._homed = False
+        self._stage = None
+        self._bt_connect_printer = pn.widgets.Button.from_param(
+            self.param.act_connect_printer, sizing_mode="stretch_width"
+        )
+        self._bt_home = pn.widgets.Button.from_param(
+            self.param.act_home, sizing_mode="stretch_width", disabled=True
+        )
+        self._bt_rest = pn.widgets.Button.from_param(
+            self.param.act_rest, sizing_mode="stretch_width", disabled=True
+        )
+        self._bt_qr_code = pn.widgets.Button.from_param(
+            self.param.act_center_on_qr_code, sizing_mode="stretch_width", disabled=True
+        )
+        self.crd_init = pn.layout.Card(
+            objects=[], title=SideBarCards.INIT.value, collapsed=False
+        )
+        self.crd_move = pn.layout.Card(
+            objects=[], title=SideBarCards.MOVE.value, collapsed=False
+        )
+
+        # Misc
         self._counter = 0
         self._debugger = pn.pane.Placeholder("Debugger", sizing_mode="stretch_width")
         self._debug_counter = pn.pane.Placeholder(
             "Debug counter", sizing_mode="stretch_width"
         )
 
-    def update_preview(self, image, crop_data: Rectangle | None = None):
+    # MARK: Preview
+    def apply_image_crop(self, image, crop_data: Rectangle | None = None):
         try:
             crop_data = (
                 Rectangle(
@@ -231,7 +263,7 @@ class PreviewPane(param.Parameterized):
                 or crop_data.bottom != 0
                 or crop_data.left != 0
                 or crop_data.right != 0
-            ) and self.crop_mode != CropMode.IGNORE:
+            ):
                 match self.crop_mode:
                     case CropMode.CROP.value:
                         image = crop_image(image=image, crop_data=crop_data)
@@ -246,36 +278,23 @@ class PreviewPane(param.Parameterized):
                         image = crop_data.to_cv(
                             image=image, color=(255, 0, 255), thickness=4
                         )
-
-            preview_object = to_pil(image)
+                    case CropMode.IGNORE:
+                        pass
         except Exception as e:
             self.update_debugger({"error": str(e), "crop_data": str(crop_data)})
+            return None
         else:
-            match self.status:
-                case CameraStatus.STOPPED:
-                    pass
-                case CameraStatus.STILL:
-                    self.preview_pane.object = safe_pil_resize(
-                        image=preview_object, new_height=768, new_width=1024
-                    )
-                case CameraStatus.VIDEO:
-                    self._counter += 1
-                    self.preview_pane.object = preview_object
-            if self.crd_thumbnail.collapsed is False:
-                self.thumbnail_pane.object = safe_pil_resize(
-                    image=preview_object,
-                    new_height=self._sidebar_width,
-                    new_width=self._sidebar_width,
-                )
+            return image
+
+    def update_preview(self, image, crop_data: Rectangle | None = None):
+        self.video_pane.object = to_pil(
+            self.apply_image_crop(image=image, crop_data=crop_data)
+        )
 
     def update_debugger(self, data):
         self._counter += 1
         self._debugger.object = data
         self._debug_counter.object = self._counter
-
-    def still_update_preview(self):
-        if self.status == CameraStatus.STILL:
-            self.do_capture_array()
 
     def set_crop(self, left, right, top, bottom):
         self.crop_left = left
@@ -283,14 +302,12 @@ class PreviewPane(param.Parameterized):
         self.crop_top = top
         self.crop_bottom = bottom
 
-    @update_still_preview
     @param.depends(
         "crop_left", "crop_right", "crop_top", "crop_bottom", "crop_mode", watch=True
     )
     def on_crop_changed(self):
         pass
 
-    @update_still_preview
     @param.depends("sensor_modes", watch=True)
     def on_sensor_mode_changed(self):
         self.camera.stop_recording()
@@ -299,24 +316,20 @@ class PreviewPane(param.Parameterized):
         self.camera.start_recording(JpegEncoder(), FileOutput(self.output))
 
     @working
-    @update_still_preview
     @param.depends("focus_mode", watch=True)
     def on_focus_mode_changed(self):
         self.camera.set_controls({"AfMode": self.focus_mode})
 
     @working
-    @update_still_preview
     @param.depends("focus_distance", watch=True)
     def on_focus_distance_changed(self):
         self.camera.set_controls({"LensPosition": self.focus_distance})
 
     @working
-    @update_still_preview
     @param.depends("act_focus", watch=True)
     def on_request_focus(self):
         self.camera.autofocus_cycle()
 
-    @update_still_preview
     @working
     @param.depends("act_focus_close", watch=True)
     def on_request_focus_close(self):
@@ -324,43 +337,24 @@ class PreviewPane(param.Parameterized):
             {"LensPosition": self.camera.camera_controls["LensPosition"][1]}
         )
 
-    @update_still_preview
     @working
     @param.depends("act_focus_far", watch=True)
     def on_request_focus_far(self):
         self.camera.set_controls({"LensPosition": 0})
 
-    @param.depends("act_preview_start_video", watch=True)
-    def on_preview_start_video(self):
-        self.start_video()
-
-    @param.depends("act_preview_start_still", watch=True)
-    def on_preview_start_still(self):
-        self.start_still()
-
-    @param.depends("act_preview_stop", watch=True)
-    def on_preview_stop(self):
+    def capture_array(self):
         self.stop()
+        image = self.camera.switch_mode_and_capture_array(
+            self.camera.create_still_configuration(), "main"
+        )
+        self.camera.stop()
+        self.start()
+        # self.still_pane.object = safe_pil_resize(
+        #     image=to_pil(self.apply_image_crop(image=image)),
+        #     new_width=1024,
+        #     new_height=768,
+        # )
 
-    def do_capture_array(self):
-        match self.status:
-            case CameraStatus.STOPPED:
-                print("Camera stopped, please start", flush=True)
-                return None
-            case CameraStatus.STILL:
-                image = self.camera.switch_mode_and_capture_array(
-                    self.camera.create_still_configuration(), "main"
-                )
-            case CameraStatus.VIDEO:
-                self.stop()
-                image = self.camera.switch_mode_and_capture_array(
-                    self.camera.create_still_configuration(), "main"
-                )
-                self.camera.stop()
-                self.start_video()
-
-        if self.status == CameraStatus.STILL:
-            self.update_preview(image)
         return crop_image(
             image=image,
             crop_data=Rectangle(
@@ -374,46 +368,163 @@ class PreviewPane(param.Parameterized):
     @param.depends("act_capture_still", watch=True)
     def on_capture_still(self):
         ensure_folder(StillFolders.RAW.value)
-        to_pil(self.do_capture_array()).save(
+        to_pil(self.capture_array()).save(
             StillFolders.RAW.value.joinpath(
                 dt.now().strftime("%Y%m%d%H%M%S")
             ).with_suffix(".jpg")
         )
 
+    def start(self):
+        if self._started is False:
+            self.stop_event.clear()
+            mode = self.camera.sensor_modes[self.sensor_modes]
+            self.camera.configure(
+                self.camera.create_video_configuration(
+                    raw=mode, main={"preserve_ar": False}
+                )
+            )
+            self.output = StreamingOutput()
+            self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
+            self.camera.start_recording(JpegEncoder(), FileOutput(self.output))
+            self.thread = Thread(target=update_panel, args=(self,))
+            self.thread.start()
+            time.sleep(0.5)
+            self._started = True
+
+    def stop(self):
+        if self._started is True:
+            self.stop_event.set()
+            self.thread.join()
+            self.camera.stop_recording()
+            self.output.close()
+            self.camera.stop()
+            self._started = False
+
+    # MARK: Printer
+    def lock_printer(self):
+        self._bt_home.disabled = True
+        self._bt_rest.disabled = True
+        self._bt_qr_code.disabled = True
+
+    def unlock_printer(self):
+        self._bt_home.disabled = False
+        self._bt_rest.disabled = False
+        self._bt_qr_code.disabled = False
+
+    @printer_busy
+    def home(self):
+        if self._stage.safe_home() is False:
+            if self._stage.safe_home() is False:
+                raise ConnectionError("Unable to home")
+
+    @printer_busy
+    def rest(self):
+        self._stage.move_position((bed.x_min, bed.x_max, bed.rest_height))
+        self._stage.finish_moves()
+
+    @printer_busy
+    def get_focused_z(
+        self, start_height=bed.individual_height, min_rel_z=-10, max_rel_z=10, delta_z=1
+    ):
+        zrange = np.array(range(min_rel_z, max_rel_z, delta_z))
+        pos = self._stage.get_position()
+        start_height
+        mxScore = -1
+        bestZ = 0
+
+        for z in zrange:
+            self._stage.move_position([pos[0], pos[1], z + start_height])
+            self._stage.finish_moves()
+            img = preview().capture_array()
+            grayImage = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            score = lap_var(grayImage)
+            if score > mxScore:
+                mxScore = score
+                bestZ = z
+
+        self._stage.move_position([pos[0], pos[1], start_height])
+        self._stage.finish_moves()
+
+        return bestZ + start_height
+
+    @staticmethod
+    def get_qr_pos(image):
+        qr_data = get_qr_data(image)
+        if qr_data["retval"] is False:
+            raise ValueError("Unable to detect QR code")
+        min_x, min_y, max_x, max_y = get_points_extremes(points=qr_data["points"][0])
+        return (min_x + max_x) // 2, (min_y + max_y) // 2
+
+    @printer_busy
+    def center_on_qr_code(self, step_val=10):
+        self.camera.set_controls(
+            {"LensPosition": self.camera.camera_controls["LensPosition"][1]}
+        )
+        self.set_crop(0, 0, 0, 0)
+        self._stage.move_absolute(bed.qr_start_x, bed.qr_start_y, bed.individual_height)
+        self.get_focused_z()
+        image = self.capture_array()
+        cy, cx = image.shape[0] // 2, image.shape[1] // 2
+        qr_cx, qr_cy = self.get_qr_pos(image)
+        step_x, step_y = -step_val if cx > qr_cx else step_val, (
+            step_val if cy > qr_cy else -step_val
+        )
+        self._stage.move_relative(step_x, step_y)
+        self._stage.finish_moves()
+        new_qr_cx, new_qr_cy = self.get_qr_pos(self.capture_array())
+
+        self._stage.move_relative(-step_x, -step_y)
+        self._stage.move_relative(
+            abs(cx - qr_cx) * step_x / abs(new_qr_cx - qr_cx),
+            abs(cy - qr_cy) * step_y / abs(new_qr_cy - qr_cy),
+        )
+        return self._stage.get_position()
+
+    @param.depends("act_connect_printer", watch=True)
+    def on_connect_printer(self):
+        for port in list_ports():
+            if str(port) == self.sel_printer:
+                self._stage = Stage(port, 115200)
+                self.home()
+                break
+
+    @param.depends("act_home", watch=True)
+    def on_home(self):
+        self.home()
+
+    @param.depends("act_rest", watch=True)
+    def on_rest(self):
+        self.rest()
+
+    @param.depends("act_center_on_qr_code", watch=True)
+    def on_center_on_qr_code(self):
+        self.center_on_qr_code()
+
+    # MARK: UI
     def get_card(
         self,
-        kind: Literal[Cards.THUMBNAIL, Cards.PREVIEW, Cards.CROP_DATA, Cards.FOCUS],
+        kind: Literal[
+            SideBarCards.PREVIEW,
+            SideBarCards.CROP_DATA,
+            SideBarCards.FOCUS,
+            SideBarCards.INIT,
+            SideBarCards.MOVE,
+        ],
     ):
         match kind:
-            case Cards.THUMBNAIL:
-                self.crd_thumbnail.objects = [self.thumbnail_pane]
-                return self.crd_thumbnail
-            case Cards.PREVIEW:
+            case SideBarCards.PREVIEW:
                 self.crd_preview.objects = [
-                    # pn.widgets.Select.from_param(
-                    #     self.param.sensor_modes,
-                    #     name="Sensor mode",
-                    #     sizing_mode="stretch_width",
-                    # ),
+                    pn.widgets.Select.from_param(
+                        self.param.sensor_modes,
+                        name="Sensor mode",
+                        sizing_mode="stretch_width",
+                    ),
                     pn.widgets.Button.from_param(
                         self.param.act_capture_still, sizing_mode="stretch_width"
                     ),
-                    pn.Row(
-                        pn.widgets.Button.from_param(
-                            self.param.act_preview_start_video,
-                            sizing_mode="stretch_width",
-                        ),
-                        pn.widgets.Button.from_param(
-                            self.param.act_preview_start_still,
-                            sizing_mode="stretch_width",
-                        ),
-                    ),
-                    pn.widgets.Button.from_param(
-                        self.param.act_preview_stop, sizing_mode="stretch_width"
-                    ),
                 ]
                 return self.crd_preview
-            case Cards.CROP_DATA:
+            case SideBarCards.CROP_DATA:
                 self.crd_crop_data.objects = [
                     pn.widgets.IntInput.from_param(
                         self.param.crop_top,
@@ -448,7 +559,7 @@ class PreviewPane(param.Parameterized):
                     ),
                 ]
                 return self.crd_crop_data
-            case Cards.FOCUS:
+            case SideBarCards.FOCUS:
                 self.crd_focus.objects = [
                     pn.widgets.Select.from_param(
                         self.param.focus_mode,
@@ -460,32 +571,53 @@ class PreviewPane(param.Parameterized):
                     ),
                     pn.Row(
                         pn.widgets.Button.from_param(
-                            self.param.act_focus_close, sizing_mode="stretch_width"
+                            self.param.act_focus_far, sizing_mode="stretch_width"
                         ),
                         pn.widgets.Button.from_param(
-                            self.param.act_focus_far, sizing_mode="stretch_width"
+                            self.param.act_focus_close, sizing_mode="stretch_width"
                         ),
                     ),
                     pn.widgets.FloatSlider.from_param(
                         self.param.focus_distance,
-                        name="Focus Distance",
+                        name="Lens Position",
                         sizing_mode="stretch_width",
                     ),
                 ]
                 return self.crd_focus
+            case SideBarCards.INIT:
+                self.crd_init.objects = [
+                    pn.widgets.Select.from_param(
+                        self.param.sel_printer, sizing_mode="stretch_width"
+                    ),
+                    self._bt_connect_printer,
+                ]
+                return self.crd_init
+            case SideBarCards.MOVE:
+                self.crd_move.objects = [
+                    pn.Row(self._bt_home, self._bt_rest),
+                    self._bt_qr_code,
+                ]
+                return self.crd_move
 
     def sidebar(self):
         return pn.Column(
             *[
                 self.get_card(c)
-                for c in [Cards.THUMBNAIL, Cards.PREVIEW, Cards.CROP_DATA, Cards.FOCUS]
+                for c in [
+                    SideBarCards.PREVIEW,
+                    SideBarCards.CROP_DATA,
+                    SideBarCards.FOCUS,
+                    SideBarCards.INIT,
+                    SideBarCards.MOVE,
+                ]
             ],
             width=self._sidebar_width,
         )
 
     def main(self):
         return pn.layout.Tabs(
-            ("Preview", self.preview_pane),
+            ("Video", self.video_pane),
+            # ("Still", self.still_pane),
             (
                 "Camera info",
                 pn.layout.Accordion(
@@ -503,48 +635,6 @@ class PreviewPane(param.Parameterized):
         sidebar.width = self._sidebar_width
         return pn.Row(sidebar, self.main())
 
-    @working
-    @update_still_preview
-    def start_still(self):
-        if self.status in [CameraStatus.STILL, CameraStatus.VIDEO]:
-            self.stop()
-        self.camera.start(show_preview=False)
-        time.sleep(0.5)
-        self.status = CameraStatus.STILL
-
-    @working
-    def start_video(self):
-        if self.status in [CameraStatus.STILL, CameraStatus.VIDEO]:
-            self.stop()
-        self.status = CameraStatus.VIDEO
-        self.stop_event.clear()
-        mode = self.camera.sensor_modes[self.sensor_modes]
-        self.camera.configure(
-            self.camera.create_video_configuration(
-                raw=mode, main={"preserve_ar": False}
-            )
-        )
-        self.output = StreamingOutput()
-        self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
-        self.camera.start_recording(JpegEncoder(), FileOutput(self.output))
-        self.thread = Thread(target=update_panel, args=(self,))
-        self.thread.start()
-
-    @working
-    def stop(self):
-        match self.status:
-            case CameraStatus.STOPPED:
-                pass
-            case CameraStatus.STILL:
-                self.camera.stop()
-            case CameraStatus.VIDEO:
-                self.stop_event.set()
-                self.thread.join()
-                self.camera.stop_recording()
-                self.output.close()
-                self.camera.stop()
-        self.status = CameraStatus.STOPPED
-
 
 _preview = None
 
@@ -556,6 +646,7 @@ def post_callback(request):
     _preview._working = True
     try:
         metadata = request.get_metadata()
+        metadata = dict(sorted(metadata.items()))
         _preview.camera_config.object = metadata
         _preview.focus_distance = metadata["LensPosition"]
         _preview.focus_mode = metadata["AfState"]
@@ -568,4 +659,5 @@ def preview():
     if _preview is None:
         _preview = PreviewPane()
         _preview.camera.post_callback = post_callback
+        _preview.start()
     return _preview

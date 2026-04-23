@@ -6,8 +6,11 @@ class Bed:
     y_lim: tuple = (0, 220)
     z_lim: tuple = (0, 250)
 
-    global_height: int = 150
-    individual_height: int = 35
+    rest_height: int = 100
+    individual_height: int = 36
+
+    qr_start_x = 30
+    qr_start_y = 30
 
     row_count: int = 9
     col_count: int = 9

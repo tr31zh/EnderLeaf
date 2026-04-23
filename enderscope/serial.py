@@ -723,6 +723,13 @@ class _VirtualMarlinDevice:
 def list_ports():
     return comports()
 
+def default_printer_port(pattern:str="USB"):
+    ports = list_ports()
+    for port in ports:
+        if pattern in port.description:
+            return port
+    return ports[0]
+
 
 class SerialDevice:
     def __init__(
