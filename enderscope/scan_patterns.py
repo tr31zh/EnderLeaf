@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle
@@ -112,3 +113,17 @@ def plot_path(
                     linewidth=1,
                 )
                 plt.gca().add_patch(c)
+
+
+def get_extremes(positions):
+    df_pos = pd.DataFrame(positions, columns=["x", "y"])
+    df_min_x = df_pos[df_pos.x == df_pos.x.min()].sort_values("y")
+    df_max_x = df_pos[df_pos.x == df_pos.x.max()].sort_values("y")
+    return np.array(
+        [
+            df_min_x.iloc[0].values,
+            df_min_x.iloc[-1].values,
+            df_max_x.iloc[-1].values,
+            df_max_x.iloc[0].values,
+        ]
+    )

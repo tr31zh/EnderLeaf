@@ -6,10 +6,13 @@ from datetime import datetime as dt
 from enum import Enum
 from typing import Literal
 import time
-import logging
+from itertools import product
 
 import numpy as np
 import cv2
+
+from matplotlib.figure import Figure
+from matplotlib.patches import Circle
 
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
@@ -22,12 +25,15 @@ import panel as pn
 
 from enderscope.serial import list_ports, default_printer_port, Stage
 from enderscope.enderlights_pi import Enderlights
+from enderscope.scan_patterns import snake, plot_path, get_extremes
 from enderscope.bed import bed
-from enderleaf.tools import ensure_folder
+from enderleaf.tools import ensure_folder, format_datetime
 from enderleaf.image import to_pil, safe_pil_resize, crop_image, Rectangle, lap_var
 from enderleaf.qr_reader import get_qr_data, get_points_extremes
 
-pn.extension("ace", "jsoneditor")
+pn.extension("ace", "jsoneditor", "ipywidgets")
+
+DST_FLD = Path(".").joinpath("output")
 
 
 class StillFolders(Enum):
@@ -40,6 +46,7 @@ class SideBarCards(Enum):
     CROP_DATA = "Crop"
     FOCUS = "Focus options"
     INIT = "Initialize"
+    PLATE = "Plate"
     MOVE = "Move"
 
 
@@ -59,18 +66,6 @@ def working(method):
             return method(self, *method_args, **method_kwargs)
         finally:
             self._working = False
-
-    return _impl
-
-
-def printer_busy(method):
-    @wraps(method)
-    def _impl(self, *method_args, **method_kwargs):
-        self.lock_printer()
-        try:
-            return method(self, *method_args, **method_kwargs)
-        finally:
-            self.unlock_printer()
 
     return _impl
 
@@ -108,12 +103,12 @@ def update_panel(preview):
             preview.update_preview(
                 image=image,
                 crop_data=Rectangle(
-                    top=round(preview.crop_top / raw_height * main_height) & ~1,
+                    top=round(preview.cam_crop_top / raw_height * main_height) & ~1,
                     bottom=main_height
-                    - (round(preview.crop_bottom / raw_height * main_height) & ~1),
-                    left=round(preview.crop_left / raw_width * main_width) & ~1,
+                    - (round(preview.cam_crop_bottom / raw_height * main_height) & ~1),
+                    left=round(preview.cam_crop_left / raw_width * main_width) & ~1,
                     right=main_width
-                    - (round(preview.crop_right / raw_width * main_width) & ~1),
+                    - (round(preview.cam_crop_right / raw_width * main_width) & ~1),
                 ),
             )
 
@@ -122,16 +117,17 @@ def update_panel(preview):
 
 
 class PreviewPane(param.Parameterized):
+    # MARK: PARAMS
     # Camera
     sensor_modes = param.Selector(default=2)
     act_capture_still = param.Action(
         default=lambda x: x.param.trigger("act_capture_still"), label="Capture still"
     )
 
-    crop_left = param.Integer(0)
-    crop_right = param.Integer(0)
-    crop_top = param.Integer(0)
-    crop_bottom = param.Integer(0)
+    cam_crop_left = param.Integer(0)
+    cam_crop_right = param.Integer(0)
+    cam_crop_top = param.Integer(0)
+    cam_crop_bottom = param.Integer(0)
     crop_mode = param.Selector(
         objects=[c.value for c in [CropMode.CROP, CropMode.LINES, CropMode.IGNORE]],
         default=CropMode.LINES.value,
@@ -164,22 +160,42 @@ class PreviewPane(param.Parameterized):
     act_home = param.Action(default=lambda x: x.param.trigger("act_home"), label="Home")
     act_rest = param.Action(default=lambda x: x.param.trigger("act_rest"), label="Rest")
     act_center_on_qr_code = param.Action(
-        default=lambda x: x.param.trigger("act_center_on_qr_code"), label="Find QR code"
+        default=lambda x: x.param.trigger("act_center_on_qr_code"),
+        label="Center on QR code",
+    )
+    act_check_corners = param.Action(
+        default=lambda x: x.param.trigger("act_check_corners"), label="Check Corners"
     )
     act_connect_printer = param.Action(
         default=lambda x: x.param.trigger("act_connect_printer"),
         label="Connect printer",
     )
-    act_connect_lights = param.Action(
-        default=lambda x: x.param.trigger("act_connect_lights"), label="Connect lights"
+    act_launch_acquisition = param.Action(
+        default=lambda x: x.param.trigger("act_launch_acquisition"),
+        label="Capture images",
     )
     sel_printer = param.Selector(
         objects=[str(p) for p in list_ports()],
         default=str(default_printer_port()),
         label="Select serial connection",
     )
+    exp_crop_left = param.Integer(1200)
+    exp_crop_right = param.Integer(1200)
+    exp_crop_top = param.Integer(400)
+    exp_crop_bottom = param.Integer(350)
+
+    exp_plate_x = param.Integer(200)
+    exp_plate_y = param.Integer(200)
+    exp_plate_row_count = param.Integer(9)
+    exp_plate_col_count = param.Integer(9)
+
+    exp_focus_start_z = param.Integer(36)
+    exp_focus_delta_z = param.Integer(10)
+
+    exp_use_lights = param.Boolean(False)
 
     def __init__(self, **params):
+        # MARK: INIT
         super().__init__(**params)
         self._working = False
         self._sidebar_width = 300
@@ -189,12 +205,12 @@ class PreviewPane(param.Parameterized):
         self.output = None
         self.camera = Picamera2()
         self.video_pane = pn.pane.Image(sizing_mode="stretch_width")
-        # self.still_pane = pn.pane.Image(sizing_mode="stretch_width")
+        self.still_pane = pn.pane.Image(sizing_mode="stretch_width")
         self.camera_config = pn.pane.JSON(
             object=None, name="Camera configuration", depth=-1
         )
         self.camera_controls = pn.widgets.JSONEditor(
-            value=self.camera.camera_controls,
+            value=dict(sorted(self.camera.camera_controls.items())),
             name="Camera controls",
             mode="view",
             sizing_mode="stretch_width",
@@ -215,27 +231,53 @@ class PreviewPane(param.Parameterized):
         self.crd_focus = pn.layout.Card(
             objects=[], title=SideBarCards.FOCUS.value, collapsed=True
         )
+        self.crd_plate = pn.layout.Card(
+            objects=[], title=SideBarCards.PLATE.value, collapsed=True
+        )
 
         # Printer
         self._homed = False
         self._stage = None
+        self.lights = Enderlights()
+        self.lights.shutter(False)
         self._bt_connect_printer = pn.widgets.Button.from_param(
             self.param.act_connect_printer, sizing_mode="stretch_width"
         )
         self._bt_home = pn.widgets.Button.from_param(
-            self.param.act_home, sizing_mode="stretch_width", disabled=True
+            self.param.act_home, sizing_mode="stretch_width", disabled=False
         )
         self._bt_rest = pn.widgets.Button.from_param(
-            self.param.act_rest, sizing_mode="stretch_width", disabled=True
+            self.param.act_rest, sizing_mode="stretch_width", disabled=False
         )
         self._bt_qr_code = pn.widgets.Button.from_param(
-            self.param.act_center_on_qr_code, sizing_mode="stretch_width", disabled=True
+            self.param.act_center_on_qr_code,
+            sizing_mode="stretch_width",
+            disabled=False,
+        )
+        self.bt_check_corners = pn.widgets.Button.from_param(
+            self.param.act_check_corners,
+            sizing_mode="stretch_width",
+            disabled=False,
+        )
+        self.bt_launch_acquisition = pn.widgets.Button.from_param(
+            self.param.act_launch_acquisition,
+            sizing_mode="stretch_width",
+            disabled=False,
         )
         self.crd_init = pn.layout.Card(
             objects=[], title=SideBarCards.INIT.value, collapsed=False
         )
         self.crd_move = pn.layout.Card(
             objects=[], title=SideBarCards.MOVE.value, collapsed=False
+        )
+        self.plot_focus = pn.pane.Matplotlib(sizing_mode="stretch_width")
+        self.plot_position = pn.pane.Matplotlib(sizing_mode="stretch_width")
+        self.plot_z = pn.indicators.LinearGauge(
+            name="Z position",
+            value=0,
+            bounds=(bed.z_min, bed.z_max),
+            width=30,
+            format="{value:.2f}mm",
         )
 
         # Misc
@@ -250,10 +292,10 @@ class PreviewPane(param.Parameterized):
         try:
             crop_data = (
                 Rectangle(
-                    top=self.crop_top,
-                    bottom=image.shape[0] - self.crop_bottom,
-                    left=self.crop_left,
-                    right=image.shape[1] - self.crop_right,
+                    top=self.cam_crop_top,
+                    bottom=image.shape[0] - self.cam_crop_bottom,
+                    left=self.cam_crop_left,
+                    right=image.shape[1] - self.cam_crop_right,
                 )
                 if crop_data is None
                 else crop_data
@@ -286,6 +328,12 @@ class PreviewPane(param.Parameterized):
         else:
             return image
 
+    def shutter(self, state: bool, value: list | tuple = (255, 255, 255)):
+        if self.exp_use_lights is True:
+            self.lights.shutter(state=state, value=value)
+        else:
+            self.lights.shutter(False)
+
     def update_preview(self, image, crop_data: Rectangle | None = None):
         self.video_pane.object = to_pil(
             self.apply_image_crop(image=image, crop_data=crop_data)
@@ -297,13 +345,18 @@ class PreviewPane(param.Parameterized):
         self._debug_counter.object = self._counter
 
     def set_crop(self, left, right, top, bottom):
-        self.crop_left = left
-        self.crop_right = right
-        self.crop_top = top
-        self.crop_bottom = bottom
+        self.cam_crop_left = left
+        self.cam_crop_right = right
+        self.cam_crop_top = top
+        self.cam_crop_bottom = bottom
 
     @param.depends(
-        "crop_left", "crop_right", "crop_top", "crop_bottom", "crop_mode", watch=True
+        "cam_crop_left",
+        "cam_crop_right",
+        "cam_crop_top",
+        "cam_crop_bottom",
+        "crop_mode",
+        watch=True,
     )
     def on_crop_changed(self):
         pass
@@ -343,25 +396,28 @@ class PreviewPane(param.Parameterized):
         self.camera.set_controls({"LensPosition": 0})
 
     def capture_array(self):
+        # self.shutter(True)
+        # time.sleep(10)
         self.stop()
         image = self.camera.switch_mode_and_capture_array(
             self.camera.create_still_configuration(), "main"
         )
+        self.shutter(False)
         self.camera.stop()
         self.start()
-        # self.still_pane.object = safe_pil_resize(
-        #     image=to_pil(self.apply_image_crop(image=image)),
-        #     new_width=1024,
-        #     new_height=768,
-        # )
+        self.still_pane.object = safe_pil_resize(
+            image=to_pil(self.apply_image_crop(image=image)),
+            new_width=1024,
+            new_height=768,
+        )
 
         return crop_image(
             image=image,
             crop_data=Rectangle(
-                left=self.crop_left,
-                top=self.crop_top,
-                right=-self.crop_right,
-                bottom=-self.crop_bottom,
+                left=self.cam_crop_left,
+                top=self.cam_crop_top,
+                right=-self.cam_crop_right,
+                bottom=-self.cam_crop_bottom,
             ),
         )
 
@@ -401,51 +457,97 @@ class PreviewPane(param.Parameterized):
             self._started = False
 
     # MARK: Printer
-    def lock_printer(self):
-        self._bt_home.disabled = True
-        self._bt_rest.disabled = True
-        self._bt_qr_code.disabled = True
+    def check_stage(self):
+        return self._stage is not None
 
-    def unlock_printer(self):
-        self._bt_home.disabled = False
-        self._bt_rest.disabled = False
-        self._bt_qr_code.disabled = False
+    def check_homed(self):
+        return self._homed
 
-    @printer_busy
+    def get_position(self):
+        if self.check_stage() is False or self.check_homed() is False:
+            return
+        pos = self._stage.get_position()
+        self.plot_z.value = pos[2]
+        return pos
+
+    def finish_moves(self):
+        if self.check_stage() is False or self.check_homed() is False:
+            return
+        self._stage.finish_moves()
+        self.get_position()
+
+    def move_position(self, position):
+        if self.check_stage() is False or self.check_homed() is False:
+            return
+        self._stage.move_position(position)
+        self.finish_moves()
+
+    def move_absolute(self, x, y, z):
+        if self.check_stage() is False or self.check_homed() is False:
+            return
+        self._stage.move_absolute(x, y, z)
+        self.finish_moves()
+
+    def move_relative(self, x, y, z: int | None = None):
+        if self.check_stage() is False or self.check_homed() is False:
+            return
+        self._stage.move_relative(x, y, z)
+        self.finish_moves()
+
     def home(self):
+        if self.check_stage() is False:
+            return
         if self._stage.safe_home() is False:
             if self._stage.safe_home() is False:
                 raise ConnectionError("Unable to home")
+        self._homed = True
+        self.finish_moves()
 
-    @printer_busy
     def rest(self):
-        self._stage.move_position((bed.x_min, bed.x_max, bed.rest_height))
-        self._stage.finish_moves()
+        if self.check_stage() is False or self.check_homed() is False:
+            return
+        self.move_position((bed.x_min, bed.x_max, bed.rest_height))
 
-    @printer_busy
-    def get_focused_z(
-        self, start_height=bed.individual_height, min_rel_z=-10, max_rel_z=10, delta_z=1
-    ):
-        zrange = np.array(range(min_rel_z, max_rel_z, delta_z))
-        pos = self._stage.get_position()
-        start_height
+    def get_focused_z(self, delta_z=1):
+        if self.check_stage() is False or self.check_homed() is False:
+            return
+        zrange = np.array(
+            range(-self.exp_focus_delta_z, self.exp_focus_delta_z, delta_z)
+        )
+        pos = self.get_position()
+        self.exp_focus_start_z
         mxScore = -1
         bestZ = 0
+        variances = {}
 
         for z in zrange:
-            self._stage.move_position([pos[0], pos[1], z + start_height])
-            self._stage.finish_moves()
-            img = preview().capture_array()
+            self.move_position([pos[0], pos[1], z + self.exp_focus_start_z])
+            img = self.capture_array()
             grayImage = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
             score = lap_var(grayImage)
+            variances[z + self.exp_focus_start_z] = score
             if score > mxScore:
                 mxScore = score
                 bestZ = z
 
-        self._stage.move_position([pos[0], pos[1], start_height])
-        self._stage.finish_moves()
+        self.move_position([pos[0], pos[1], self.exp_focus_start_z])
 
-        return bestZ + start_height
+        fig = Figure(figsize=(4, 4))
+        ax = fig.subplots(nrows=1, ncols=1)
+        fig.suptitle("Variance")
+        ax.plot(list(variances.keys()), list(variances.values()))
+        ax.add_patch(
+            Circle(
+                xy=(pos[2] + bestZ, variances[pos[2] + bestZ]),
+                radius=1,
+                edgecolor="lime",
+                facecolor="lime",
+                linewidth=1,
+            )
+        )
+        self.plot_focus.object = fig
+
+        return bestZ + self.exp_focus_start_z
 
     @staticmethod
     def get_qr_pos(image):
@@ -455,13 +557,14 @@ class PreviewPane(param.Parameterized):
         min_x, min_y, max_x, max_y = get_points_extremes(points=qr_data["points"][0])
         return (min_x + max_x) // 2, (min_y + max_y) // 2
 
-    @printer_busy
     def center_on_qr_code(self, step_val=10):
+        if self.check_stage() is False or self.check_homed() is False:
+            return
         self.camera.set_controls(
             {"LensPosition": self.camera.camera_controls["LensPosition"][1]}
         )
         self.set_crop(0, 0, 0, 0)
-        self._stage.move_absolute(bed.qr_start_x, bed.qr_start_y, bed.individual_height)
+        self.move_absolute(bed.qr_start_x, bed.qr_start_y, bed.individual_height)
         self.get_focused_z()
         image = self.capture_array()
         cy, cx = image.shape[0] // 2, image.shape[1] // 2
@@ -469,16 +572,86 @@ class PreviewPane(param.Parameterized):
         step_x, step_y = -step_val if cx > qr_cx else step_val, (
             step_val if cy > qr_cy else -step_val
         )
-        self._stage.move_relative(step_x, step_y)
-        self._stage.finish_moves()
+        self.move_relative(step_x, step_y)
         new_qr_cx, new_qr_cy = self.get_qr_pos(self.capture_array())
 
-        self._stage.move_relative(-step_x, -step_y)
-        self._stage.move_relative(
+        self.move_relative(-step_x, -step_y)
+        self.move_relative(
             abs(cx - qr_cx) * step_x / abs(new_qr_cx - qr_cx),
             abs(cy - qr_cy) * step_y / abs(new_qr_cy - qr_cy),
         )
-        return self._stage.get_position()
+        return self.get_position()
+
+    def check_corners(self):
+        if self.check_stage() is False or self.check_homed() is False:
+            return
+        x, y, z = self.center_on_qr_code()
+        positions = snake(
+            cols=self.exp_plate_col_count, rows=self.exp_plate_row_count
+        ) * [
+            # steps
+            self.exp_plate_x / self.exp_plate_row_count,
+            self.exp_plate_y / self.exp_plate_col_count,
+        ] + [
+            # origin
+            x,
+            y,
+        ]
+        self.set_crop(
+            top=self.exp_crop_top,
+            bottom=self.exp_crop_bottom,
+            left=self.exp_crop_left,
+            right=self.exp_crop_right,
+        )
+        for position in get_extremes(positions):
+            self.move_position(np.append(position, z))
+            self.capture_array()
+            time.sleep(1)
+        self.set_crop(top=0, bottom=0, left=0, right=0)
+        self.move_position((x, y, z))
+
+    def launch_acquisition(self):
+        if self.check_stage() is False or self.check_homed() is False:
+            return
+        x, y, z = self.center_on_qr_code()
+        positions = snake(
+            cols=self.exp_plate_col_count, rows=self.exp_plate_row_count
+        ) * [
+            # steps
+            self.exp_plate_x / self.exp_plate_row_count,
+            self.exp_plate_y / self.exp_plate_col_count,
+        ] + [
+            # origin
+            x,
+            y,
+        ]
+        self.set_crop(
+            top=self.exp_crop_top,
+            bottom=self.exp_crop_bottom,
+            left=self.exp_crop_left,
+            right=self.exp_crop_right,
+        )
+        exp_name = get_qr_data(self.capture_array())["info"][0]
+        try:
+            exp, inoc, _ = exp_name.split("_")
+            ensure_folder(DST_FLD.joinpath(exp, inoc))
+        except:
+            exp, inoc = "test", "i1"
+            ensure_folder(DST_FLD.joinpath(exp, inoc))
+
+        column_names = [i + 1 for i in range(self.exp_plate_col_count)]
+        row_names = [chr(65 + i) for i in range(self.exp_plate_row_count)]
+        for p, (c, r) in zip(positions, list(product(column_names, row_names))):
+            self.move_position(np.append(p, z))
+            file_name = f"{exp_name}#{r}#{c}#{format_datetime()}"
+            cv2.imwrite(
+                str(
+                    DST_FLD.joinpath(exp, inoc).joinpath(file_name).with_suffix(".png")
+                ),
+                cv2.cvtColor(self.capture_array(), cv2.COLOR_RGB2BGR),
+            )
+        self.set_crop(top=0, bottom=0, left=0, right=0)
+        self.rest()
 
     @param.depends("act_connect_printer", watch=True)
     def on_connect_printer(self):
@@ -500,6 +673,14 @@ class PreviewPane(param.Parameterized):
     def on_center_on_qr_code(self):
         self.center_on_qr_code()
 
+    @param.depends("act_check_corners", watch=True)
+    def on_check_corners(self):
+        self.check_corners()
+
+    @param.depends("act_launch_acquisition", watch=True)
+    def on_launch_acquisition(self):
+        self.launch_acquisition()
+
     # MARK: UI
     def get_card(
         self,
@@ -511,6 +692,7 @@ class PreviewPane(param.Parameterized):
             SideBarCards.MOVE,
         ],
     ):
+        margin = (10, 2, 10, 2)
         match kind:
             case SideBarCards.PREVIEW:
                 self.crd_preview.objects = [
@@ -522,80 +704,165 @@ class PreviewPane(param.Parameterized):
                     pn.widgets.Button.from_param(
                         self.param.act_capture_still, sizing_mode="stretch_width"
                     ),
+                    pn.layout.WidgetBox(
+                        "#### Crop Feedback (Ignored while in experiments)",
+                        pn.Row(
+                            pn.widgets.IntInput.from_param(
+                                self.param.cam_crop_top,
+                                name="Top",
+                                align="center",
+                                sizing_mode="stretch_width",
+                                step=2,
+                                margin=margin,
+                            ),
+                            pn.widgets.IntInput.from_param(
+                                self.param.cam_crop_left,
+                                name="Left",
+                                sizing_mode="stretch_width",
+                                step=2,
+                                margin=margin,
+                            ),
+                            pn.widgets.IntInput.from_param(
+                                self.param.cam_crop_right,
+                                name="Right",
+                                sizing_mode="stretch_width",
+                                step=2,
+                                margin=margin,
+                            ),
+                            pn.widgets.IntInput.from_param(
+                                self.param.cam_crop_bottom,
+                                name="Bottom",
+                                align="center",
+                                sizing_mode="stretch_width",
+                                step=2,
+                                margin=margin,
+                            ),
+                            margin=(2, 8, 2, 8),
+                        ),
+                        pn.widgets.Select.from_param(
+                            self.param.crop_mode, sizing_mode="stretch_width"
+                        ),
+                    ),
+                    pn.layout.WidgetBox(
+                        "#### Focus (Ignored while in experiments)",
+                        pn.widgets.Select.from_param(
+                            self.param.focus_mode,
+                            name="Focus mode",
+                            sizing_mode="stretch_width",
+                        ),
+                        pn.widgets.Button.from_param(
+                            self.param.act_focus, sizing_mode="stretch_width"
+                        ),
+                        pn.Row(
+                            pn.widgets.Button.from_param(
+                                self.param.act_focus_far, sizing_mode="stretch_width"
+                            ),
+                            pn.widgets.Button.from_param(
+                                self.param.act_focus_close, sizing_mode="stretch_width"
+                            ),
+                        ),
+                        pn.widgets.FloatSlider.from_param(
+                            self.param.focus_distance,
+                            name="Lens Position",
+                            sizing_mode="stretch_width",
+                        ),
+                    ),
                 ]
                 return self.crd_preview
-            case SideBarCards.CROP_DATA:
-                self.crd_crop_data.objects = [
-                    pn.widgets.IntInput.from_param(
-                        self.param.crop_top,
-                        name="Top",
-                        align="center",
-                        sizing_mode="stretch_width",
-                        step=2,
-                    ),
-                    pn.Row(
-                        pn.widgets.IntInput.from_param(
-                            self.param.crop_left,
-                            name="Left",
-                            sizing_mode="stretch_width",
-                            step=2,
-                        ),
-                        pn.widgets.IntInput.from_param(
-                            self.param.crop_right,
-                            name="Right",
-                            sizing_mode="stretch_width",
-                            step=2,
-                        ),
-                    ),
-                    pn.widgets.IntInput.from_param(
-                        self.param.crop_bottom,
-                        name="Bottom",
-                        align="center",
-                        sizing_mode="stretch_width",
-                        step=2,
-                    ),
-                    pn.widgets.Select.from_param(
-                        self.param.crop_mode, sizing_mode="stretch_width"
-                    ),
-                ]
-                return self.crd_crop_data
-            case SideBarCards.FOCUS:
-                self.crd_focus.objects = [
-                    pn.widgets.Select.from_param(
-                        self.param.focus_mode,
-                        name="Focus mode",
-                        sizing_mode="stretch_width",
-                    ),
-                    pn.widgets.Button.from_param(
-                        self.param.act_focus, sizing_mode="stretch_width"
-                    ),
-                    pn.Row(
-                        pn.widgets.Button.from_param(
-                            self.param.act_focus_far, sizing_mode="stretch_width"
-                        ),
-                        pn.widgets.Button.from_param(
-                            self.param.act_focus_close, sizing_mode="stretch_width"
-                        ),
-                    ),
-                    pn.widgets.FloatSlider.from_param(
-                        self.param.focus_distance,
-                        name="Lens Position",
-                        sizing_mode="stretch_width",
-                    ),
-                ]
-                return self.crd_focus
             case SideBarCards.INIT:
                 self.crd_init.objects = [
                     pn.widgets.Select.from_param(
                         self.param.sel_printer, sizing_mode="stretch_width"
                     ),
                     self._bt_connect_printer,
+                    pn.widgets.Checkbox.from_param(
+                        self.param.exp_use_lights,
+                        name="Use lights",
+                        sizing_mode="stretch_width",
+                    ),
                 ]
                 return self.crd_init
+            case SideBarCards.PLATE:
+                self.crd_plate.objects = [
+                    pn.Row(
+                        pn.widgets.IntInput.from_param(
+                            self.param.exp_plate_x,
+                            name="Plate X size",
+                            align="center",
+                            sizing_mode="stretch_width",
+                        ),
+                        pn.widgets.IntInput.from_param(
+                            self.param.exp_plate_y,
+                            name="Plate Y size",
+                            align="center",
+                            sizing_mode="stretch_width",
+                        ),
+                    ),
+                    pn.Row(
+                        pn.widgets.IntInput.from_param(
+                            self.param.exp_plate_row_count,
+                            name="Plate ROW count",
+                            align="center",
+                            sizing_mode="stretch_width",
+                        ),
+                        pn.widgets.IntInput.from_param(
+                            self.param.exp_plate_col_count,
+                            name="Plate COL count",
+                            align="center",
+                            sizing_mode="stretch_width",
+                        ),
+                    ),
+                ]
+                return self.crd_plate
+            case SideBarCards.CROP_DATA:
+                self.crd_crop_data.objects = [
+                    pn.widgets.IntInput.from_param(
+                        self.param.exp_crop_top,
+                        name="Top",
+                        align="center",
+                        sizing_mode="stretch_width",
+                    ),
+                    pn.Row(
+                        pn.widgets.IntInput.from_param(
+                            self.param.exp_crop_left,
+                            name="Left",
+                            sizing_mode="stretch_width",
+                        ),
+                        pn.widgets.IntInput.from_param(
+                            self.param.exp_crop_right,
+                            name="Right",
+                            sizing_mode="stretch_width",
+                        ),
+                    ),
+                    pn.widgets.IntInput.from_param(
+                        self.param.exp_crop_bottom,
+                        name="Bottom",
+                        align="center",
+                        sizing_mode="stretch_width",
+                    ),
+                ]
+                return self.crd_crop_data
+            case SideBarCards.FOCUS:
+                self.crd_focus.objects = [
+                    pn.Row(
+                        pn.widgets.IntInput.from_param(
+                            self.param.exp_focus_start_z,
+                            name="Focus start Z",
+                            sizing_mode="stretch_width",
+                        ),
+                        pn.widgets.IntInput.from_param(
+                            self.param.exp_focus_delta_z,
+                            name="Focus ΔZ",
+                            sizing_mode="stretch_width",
+                        ),
+                    )
+                ]
+                return self.crd_focus
             case SideBarCards.MOVE:
                 self.crd_move.objects = [
                     pn.Row(self._bt_home, self._bt_rest),
-                    self._bt_qr_code,
+                    pn.Row(self._bt_qr_code, self.bt_check_corners),
+                    self.bt_launch_acquisition,
                 ]
                 return self.crd_move
 
@@ -605,9 +872,10 @@ class PreviewPane(param.Parameterized):
                 self.get_card(c)
                 for c in [
                     SideBarCards.PREVIEW,
+                    SideBarCards.INIT,
+                    SideBarCards.PLATE,
                     SideBarCards.CROP_DATA,
                     SideBarCards.FOCUS,
-                    SideBarCards.INIT,
                     SideBarCards.MOVE,
                 ]
             ],
@@ -616,8 +884,14 @@ class PreviewPane(param.Parameterized):
 
     def main(self):
         return pn.layout.Tabs(
-            ("Video", self.video_pane),
-            # ("Still", self.still_pane),
+            ("Preview", self.video_pane),
+            (
+                "Experiment",
+                pn.Column(
+                    pn.Row(self.plot_focus, self.plot_position, self.plot_z),
+                    self.still_pane,
+                ),
+            ),
             (
                 "Camera info",
                 pn.layout.Accordion(
