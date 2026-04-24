@@ -3,6 +3,7 @@ import pandas as pd
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle
+from matplotlib.figure import Figure
 
 from enderscope.bed import bed
 
@@ -115,15 +116,64 @@ def plot_path(
                 plt.gca().add_patch(c)
 
 
+def plot_path_status(
+    path: np.ndarray | None = None,
+    title="Path preview",
+    circle_diam: float | None = None,
+    highlighted_indexes: int | list | None = None,
+):
+    fig = Figure(figsize=(4, 4))
+    ax = fig.subplots(nrows=1, ncols=1)
+    ax.add_patch(
+        Rectangle(
+            (0, 0),
+            bed.x_max,
+            bed.y_max,
+            edgecolor="green",
+            facecolor="#00ff0005",
+            linewidth=1,
+        )
+    )
+    ax.axis("equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlim(bed.x_min, bed.x_max)
+    ax.set_ylim(bed.y_min, bed.y_max)
+    ax.set_xlabel("x axis")
+    ax.set_ylabel("y axis")
+    ax.set_title(title)
+    if path is None:
+        return fig
+    x = path[:, 0]
+    y = path[:, 1]
+    ax.plot(x, y, marker=".")
+    for idx, (x_pos, y_pos) in enumerate(zip(x, y)):
+        if highlighted_indexes is None:
+            facecolor = "none"
+        elif isinstance(highlighted_indexes, list):
+            facecolor = "lightgreen" if idx in highlighted_indexes else "none"
+        else:
+            facecolor = (
+                "white"
+                if idx < highlighted_indexes
+                else "lightgreen" if highlighted_indexes == idx else "lightblue"
+            )
+        if circle_diam is not None:
+            ax.add_patch(
+                Circle(
+                    xy=(x_pos, y_pos),
+                    radius=circle_diam / 2,
+                    edgecolor="green",
+                    facecolor=facecolor,
+                    linewidth=1,
+                )
+            )
+
+    return fig
+
+
 def get_extremes(positions):
     df_pos = pd.DataFrame(positions, columns=["x", "y"])
     df_min_x = df_pos[df_pos.x == df_pos.x.min()].sort_values("y")
     df_max_x = df_pos[df_pos.x == df_pos.x.max()].sort_values("y")
-    return np.array(
-        [
-            df_min_x.iloc[0].values,
-            df_min_x.iloc[-1].values,
-            df_max_x.iloc[-1].values,
-            df_max_x.iloc[0].values,
-        ]
-    )
+    return [df_min_x.iloc[0], df_min_x.iloc[-1], df_max_x.iloc[-1], df_max_x.iloc[0]]

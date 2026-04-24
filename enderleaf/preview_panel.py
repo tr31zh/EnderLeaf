@@ -25,7 +25,7 @@ import panel as pn
 
 from enderscope.serial import list_ports, default_printer_port, Stage
 from enderscope.enderlights_pi import Enderlights
-from enderscope.scan_patterns import snake, plot_path, get_extremes
+from enderscope.scan_patterns import snake, plot_path, get_extremes, plot_path_status
 from enderscope.bed import bed
 from enderleaf.tools import ensure_folder, format_datetime
 from enderleaf.image import to_pil, safe_pil_resize, crop_image, Rectangle, lap_var
@@ -158,7 +158,8 @@ class PreviewPane(param.Parameterized):
 
     # Printer
     act_home = param.Action(default=lambda x: x.param.trigger("act_home"), label="Home")
-    act_rest = param.Action(default=lambda x: x.param.trigger("act_rest"), label="Rest")
+    act_idle = param.Action(default=lambda x: x.param.trigger("act_idle"), label="Idle")
+    act_park = param.Action(default=lambda x: x.param.trigger("act_park"), label="Park")
     act_center_on_qr_code = param.Action(
         default=lambda x: x.param.trigger("act_center_on_qr_code"),
         label="Center on QR code",
@@ -246,8 +247,11 @@ class PreviewPane(param.Parameterized):
         self._bt_home = pn.widgets.Button.from_param(
             self.param.act_home, sizing_mode="stretch_width", disabled=False
         )
-        self._bt_rest = pn.widgets.Button.from_param(
-            self.param.act_rest, sizing_mode="stretch_width", disabled=False
+        self._bt_idle = pn.widgets.Button.from_param(
+            self.param.act_idle, sizing_mode="stretch_width", disabled=False
+        )
+        self._bt_park = pn.widgets.Button.from_param(
+            self.param.act_park, sizing_mode="stretch_width", disabled=False
         )
         self._bt_qr_code = pn.widgets.Button.from_param(
             self.param.act_center_on_qr_code,
@@ -270,14 +274,17 @@ class PreviewPane(param.Parameterized):
         self.crd_move = pn.layout.Card(
             objects=[], title=SideBarCards.MOVE.value, collapsed=False
         )
-        self.plot_focus = pn.pane.Matplotlib(sizing_mode="stretch_width")
-        self.plot_position = pn.pane.Matplotlib(sizing_mode="stretch_width")
+        self.plot_focus = pn.pane.Matplotlib(sizing_mode="stretch_width", height=300)
+        self.plot_position = pn.pane.Matplotlib(
+            object=plot_path_status(), sizing_mode="stretch_width", height=300
+        )
         self.plot_z = pn.indicators.LinearGauge(
             name="Z position",
             value=0,
             bounds=(bed.z_min, bed.z_max),
-            width=30,
-            format="{value:.2f}mm",
+            width=60,
+            sizing_mode="stretch_height",
+            format="",
         )
 
         # Misc
@@ -476,10 +483,21 @@ class PreviewPane(param.Parameterized):
         self._stage.finish_moves()
         self.get_position()
 
-    def move_position(self, position):
+    def update_positions_plot(
+        self, positions: list | None = None, index: int | None = None
+    ):
+        self.plot_position.object = plot_path_status(
+            path=positions, circle_diam=17, highlighted_indexes=index
+        )
+
+    def move_position(
+        self, position, positions: list | None = None, index: int | None = None
+    ):
         if self.check_stage() is False or self.check_homed() is False:
             return
         self._stage.move_position(position)
+        if positions is not None:
+            self.update_positions_plot(positions=positions, index=index)
         self.finish_moves()
 
     def move_absolute(self, x, y, z):
@@ -494,7 +512,7 @@ class PreviewPane(param.Parameterized):
         self._stage.move_relative(x, y, z)
         self.finish_moves()
 
-    def home(self):
+    def go_home(self):
         if self.check_stage() is False:
             return
         if self._stage.safe_home() is False:
@@ -503,12 +521,17 @@ class PreviewPane(param.Parameterized):
         self._homed = True
         self.finish_moves()
 
-    def rest(self):
+    def go_rest(self):
         if self.check_stage() is False or self.check_homed() is False:
             return
-        self.move_position((bed.x_min, bed.x_max, bed.rest_height))
+        self.move_position((bed.x_min, bed.y_max, bed.rest_height))
 
-    def get_focused_z(self, delta_z=1):
+    def go_park(self):
+        if self.check_stage() is False or self.check_homed() is False:
+            return
+        self.move_position((bed.x_min, bed.y_max // 2, bed.rest_height))
+
+    def get_focused_z(self, delta_z=1) -> float:
         if self.check_stage() is False or self.check_homed() is False:
             return
         zrange = np.array(
@@ -555,7 +578,7 @@ class PreviewPane(param.Parameterized):
         if qr_data["retval"] is False:
             raise ValueError("Unable to detect QR code")
         min_x, min_y, max_x, max_y = get_points_extremes(points=qr_data["points"][0])
-        return (min_x + max_x) // 2, (min_y + max_y) // 2
+        return (min_x + max_x) // 2, (min_y + max_y) // 2, min_x, min_y, max_x, max_y
 
     def center_on_qr_code(self, step_val=10):
         if self.check_stage() is False or self.check_homed() is False:
@@ -568,12 +591,12 @@ class PreviewPane(param.Parameterized):
         self.get_focused_z()
         image = self.capture_array()
         cy, cx = image.shape[0] // 2, image.shape[1] // 2
-        qr_cx, qr_cy = self.get_qr_pos(image)
+        qr_cx, qr_cy, *_ = self.get_qr_pos(image)
         step_x, step_y = -step_val if cx > qr_cx else step_val, (
             step_val if cy > qr_cy else -step_val
         )
         self.move_relative(step_x, step_y)
-        new_qr_cx, new_qr_cy = self.get_qr_pos(self.capture_array())
+        new_qr_cx, new_qr_cy, *_ = self.get_qr_pos(self.capture_array())
 
         self.move_relative(-step_x, -step_y)
         self.move_relative(
@@ -582,11 +605,8 @@ class PreviewPane(param.Parameterized):
         )
         return self.get_position()
 
-    def check_corners(self):
-        if self.check_stage() is False or self.check_homed() is False:
-            return
-        x, y, z = self.center_on_qr_code()
-        positions = snake(
+    def build_snake(self, x, y)->np.ndarray:
+        return snake(
             cols=self.exp_plate_col_count, rows=self.exp_plate_row_count
         ) * [
             # steps
@@ -597,6 +617,13 @@ class PreviewPane(param.Parameterized):
             x,
             y,
         ]
+
+    def check_corners(self):
+        if self.check_stage() is False or self.check_homed() is False:
+            return
+        x, y, z = self.center_on_qr_code()
+        positions = self.build_snake(x,y)
+        self.update_positions_plot(positions=positions)
         self.set_crop(
             top=self.exp_crop_top,
             bottom=self.exp_crop_bottom,
@@ -604,27 +631,28 @@ class PreviewPane(param.Parameterized):
             right=self.exp_crop_right,
         )
         for position in get_extremes(positions):
-            self.move_position(np.append(position, z))
+            self.move_position(
+                (position.x, position.y, z), positions=positions, index=[position.name]
+            )
             self.capture_array()
             time.sleep(1)
         self.set_crop(top=0, bottom=0, left=0, right=0)
-        self.move_position((x, y, z))
+        self.move_position((x, y, z), positions=positions, index=[0])
 
     def launch_acquisition(self):
         if self.check_stage() is False or self.check_homed() is False:
             return
         x, y, z = self.center_on_qr_code()
-        positions = snake(
-            cols=self.exp_plate_col_count, rows=self.exp_plate_row_count
-        ) * [
-            # steps
-            self.exp_plate_x / self.exp_plate_row_count,
-            self.exp_plate_y / self.exp_plate_col_count,
-        ] + [
-            # origin
-            x,
-            y,
-        ]
+        image = self.capture_array()
+        cx, cy, min_x, min_y, max_x, max_y = self.get_qr_pos(image)
+        self.set_crop(
+            top=min_y,
+            bottom=image.shape[0] - max_y,
+            left=min_x,
+            right=image.shape[1] - max_x,
+        )
+        z = self.get_focused_z()
+        positions = self.build_snake(x,y)
         self.set_crop(
             top=self.exp_crop_top,
             bottom=self.exp_crop_bottom,
@@ -641,8 +669,10 @@ class PreviewPane(param.Parameterized):
 
         column_names = [i + 1 for i in range(self.exp_plate_col_count)]
         row_names = [chr(65 + i) for i in range(self.exp_plate_row_count)]
-        for p, (c, r) in zip(positions, list(product(column_names, row_names))):
-            self.move_position(np.append(p, z))
+        for idx, (p, (c, r)) in enumerate(
+            zip(positions, list(product(column_names, row_names)))
+        ):
+            self.move_position(np.append(p, z), positions=positions, index=idx)
             file_name = f"{exp_name}#{r}#{c}#{format_datetime()}"
             cv2.imwrite(
                 str(
@@ -650,24 +680,29 @@ class PreviewPane(param.Parameterized):
                 ),
                 cv2.cvtColor(self.capture_array(), cv2.COLOR_RGB2BGR),
             )
+        self.update_positions_plot(positions)
         self.set_crop(top=0, bottom=0, left=0, right=0)
-        self.rest()
+        self.go_rest()
 
     @param.depends("act_connect_printer", watch=True)
     def on_connect_printer(self):
         for port in list_ports():
             if str(port) == self.sel_printer:
                 self._stage = Stage(port, 115200)
-                self.home()
+                self.go_home()
                 break
 
     @param.depends("act_home", watch=True)
     def on_home(self):
-        self.home()
+        self.go_home()
 
-    @param.depends("act_rest", watch=True)
+    @param.depends("act_idle", watch=True)
     def on_rest(self):
-        self.rest()
+        self.go_rest()
+
+    @param.depends("act_park", watch=True)
+    def on_park(self):
+        self.go_park()
 
     @param.depends("act_center_on_qr_code", watch=True)
     def on_center_on_qr_code(self):
@@ -860,7 +895,7 @@ class PreviewPane(param.Parameterized):
                 return self.crd_focus
             case SideBarCards.MOVE:
                 self.crd_move.objects = [
-                    pn.Row(self._bt_home, self._bt_rest),
+                    pn.Row(self._bt_home, self._bt_idle, self._bt_park),
                     pn.Row(self._bt_qr_code, self.bt_check_corners),
                     self.bt_launch_acquisition,
                 ]

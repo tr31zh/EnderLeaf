@@ -2,9 +2,9 @@ from dataclasses import dataclass
 
 @dataclass
 class Bed:
-    x_lim: tuple = (0, 220)
-    y_lim: tuple = (0, 220)
-    z_lim: tuple = (0, 250)
+    x_lim: tuple = (0, 235)
+    y_lim: tuple = (0, 235)
+    z_lim: tuple = (0, 235)
 
     rest_height: int = 100
     individual_height: int = 36
