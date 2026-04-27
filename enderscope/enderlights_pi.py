@@ -5,7 +5,7 @@ import board
 import neopixel
 
 PIN = board.D18
-LED_COUNT = 12
+LED_COUNT = 16
 
 
 class CardPoint(Enum):

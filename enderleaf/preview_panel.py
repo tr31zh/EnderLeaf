@@ -10,6 +10,7 @@ from itertools import product
 
 import numpy as np
 import cv2
+import pandas as pd
 
 from matplotlib.figure import Figure
 from matplotlib.patches import Circle
@@ -27,7 +28,12 @@ from enderscope.serial import list_ports, default_printer_port, Stage
 from enderscope.enderlights_pi import Enderlights
 from enderscope.scan_patterns import snake, plot_path, get_extremes, plot_path_status
 from enderscope.bed import bed
-from enderleaf.tools import ensure_folder, format_datetime
+from enderleaf.tools import (
+    ensure_folder,
+    format_datetime,
+    write_dataframe,
+    read_dataframe,
+)
 from enderleaf.image import to_pil, safe_pil_resize, crop_image, Rectangle, lap_var
 from enderleaf.qr_reader import get_qr_data, get_points_extremes
 
@@ -47,7 +53,7 @@ class SideBarCards(Enum):
     FOCUS = "Focus options"
     INIT = "Initialize"
     PLATE = "Plate"
-    MOVE = "Move"
+    MOVE = "Control"
 
 
 class CropMode(Enum):
@@ -68,6 +74,85 @@ def working(method):
             self._working = False
 
     return _impl
+
+
+def file_to_dataframe(file):
+    file_name = file.with_suffix("").name.replace("_", "#")
+    file_parts = file_name.split("#")
+    current_file_ts = pd.to_datetime(file_parts[-1])
+
+    return pd.DataFrame(
+        [
+            [
+                file_parts[0],
+                file_parts[1].replace("I", ""),
+                file_parts[2].replace("P", ""),
+                file_parts[3],
+                file_parts[4],
+                current_file_ts,
+                file.name,
+                current_file_ts.date(),
+                current_file_ts.year,
+                current_file_ts.month,
+                current_file_ts.day,
+                current_file_ts.time(),
+                current_file_ts.hour,
+                current_file_ts.minute,
+                current_file_ts.second,
+            ]
+        ],
+        columns=[
+            "exp",
+            "inoc",
+            "plate",
+            "row",
+            "col",
+            "date_time",
+            "name",
+            "date",
+            "year",
+            "month",
+            "day",
+            "time",
+            "hour",
+            "minute",
+            "second",
+        ],
+    )
+
+
+def job_to_dataframe(files):
+    df = pd.concat([file_to_dataframe(file) for file in files])
+    df["job_ts"] = df["date_time"].min()
+    row = df.iloc[0]
+    file_name = (
+        DST_FLD.joinpath("data", row.exp, "I" + row.inoc)
+        .joinpath(
+            row.exp
+            + "#I"
+            + str(row.inoc)
+            + "#P"
+            + str(row.plate)
+            + "#M"
+            + str(row.month)
+            + "#D"
+            + str(row.day)
+        )
+        .with_suffix(".csv")
+    )
+    return write_dataframe(
+        pd.concat(
+            [
+                (
+                    read_dataframe(file_name)
+                    if file_name.is_file() is True
+                    else pd.DataFrame()
+                ),
+                df,
+            ]
+        ),
+        path=file_name,
+    )
 
 
 class StreamingOutput(io.BufferedIOBase):
@@ -162,7 +247,7 @@ class PreviewPane(param.Parameterized):
     act_park = param.Action(default=lambda x: x.param.trigger("act_park"), label="Park")
     act_center_on_qr_code = param.Action(
         default=lambda x: x.param.trigger("act_center_on_qr_code"),
-        label="Center on QR code",
+        label="Go to QR code",
     )
     act_check_corners = param.Action(
         default=lambda x: x.param.trigger("act_check_corners"), label="Check Corners"
@@ -174,6 +259,14 @@ class PreviewPane(param.Parameterized):
     act_launch_acquisition = param.Action(
         default=lambda x: x.param.trigger("act_launch_acquisition"),
         label="Capture images",
+    )
+    act_lights_on = param.Action(
+        default=lambda x: x.param.trigger("act_lights_on"),
+        label="Lights on",
+    )
+    act_lights_off = param.Action(
+        default=lambda x: x.param.trigger("act_lights_off"),
+        label="Lights off",
     )
     sel_printer = param.Selector(
         objects=[str(p) for p in list_ports()],
@@ -192,8 +285,6 @@ class PreviewPane(param.Parameterized):
 
     exp_focus_start_z = param.Integer(36)
     exp_focus_delta_z = param.Integer(10)
-
-    exp_use_lights = param.Boolean(False)
 
     def __init__(self, **params):
         # MARK: INIT
@@ -245,28 +336,52 @@ class PreviewPane(param.Parameterized):
             self.param.act_connect_printer, sizing_mode="stretch_width"
         )
         self._bt_home = pn.widgets.Button.from_param(
-            self.param.act_home, sizing_mode="stretch_width", disabled=False
+            self.param.act_home,
+            sizing_mode="stretch_width",
+            icon="home",
+            icon_size="2em",
         )
         self._bt_idle = pn.widgets.Button.from_param(
-            self.param.act_idle, sizing_mode="stretch_width", disabled=False
+            self.param.act_idle,
+            sizing_mode="stretch_width",
+            icon="clock-pause",
+            icon_size="2em",
         )
         self._bt_park = pn.widgets.Button.from_param(
-            self.param.act_park, sizing_mode="stretch_width", disabled=False
+            self.param.act_park,
+            sizing_mode="stretch_width",
+            icon="parking-circle",
+            icon_size="2em",
         )
         self._bt_qr_code = pn.widgets.Button.from_param(
             self.param.act_center_on_qr_code,
-            sizing_mode="stretch_width",
-            disabled=False,
+            icon="qrcode",
+            icon_size="2em",
+            sizing_mode="stretch_width"
         )
         self.bt_check_corners = pn.widgets.Button.from_param(
             self.param.act_check_corners,
-            sizing_mode="stretch_width",
-            disabled=False,
+            icon="border-corners",
+            icon_size="2em",
+            sizing_mode="stretch_width"
         )
         self.bt_launch_acquisition = pn.widgets.Button.from_param(
             self.param.act_launch_acquisition,
+            icon="player-play",
+            icon_size="2em",
             sizing_mode="stretch_width",
-            disabled=False,
+        )
+        self.bt_lights_on = pn.widgets.Button.from_param(
+            self.param.act_lights_on,
+            icon="bulb",
+            icon_size="2em",
+            sizing_mode="stretch_width",
+        )
+        self.bt_lights_off = pn.widgets.Button.from_param(
+            self.param.act_lights_off,
+            icon="bulb-off",
+            icon_size="2em",
+            sizing_mode="stretch_width",
         )
         self.crd_init = pn.layout.Card(
             objects=[], title=SideBarCards.INIT.value, collapsed=False
@@ -274,9 +389,14 @@ class PreviewPane(param.Parameterized):
         self.crd_move = pn.layout.Card(
             objects=[], title=SideBarCards.MOVE.value, collapsed=False
         )
-        self.plot_focus = pn.pane.Matplotlib(sizing_mode="stretch_width", height=300)
+        self.plot_focus = pn.pane.Matplotlib(
+            sizing_mode="stretch_width", height=300, align="start"
+        )
         self.plot_position = pn.pane.Matplotlib(
-            object=plot_path_status(), sizing_mode="stretch_width", height=300
+            object=plot_path_status(),
+            sizing_mode="stretch_width",
+            height=300,
+            align="start",
         )
         self.plot_z = pn.indicators.LinearGauge(
             name="Z position",
@@ -285,6 +405,7 @@ class PreviewPane(param.Parameterized):
             width=60,
             sizing_mode="stretch_height",
             format="",
+            align="start",
         )
 
         # Misc
@@ -335,11 +456,8 @@ class PreviewPane(param.Parameterized):
         else:
             return image
 
-    def shutter(self, state: bool, value: list | tuple = (255, 255, 255)):
-        if self.exp_use_lights is True:
-            self.lights.shutter(state=state, value=value)
-        else:
-            self.lights.shutter(False)
+    def shutter(self, state: bool, value: list | tuple = (255, 255, 255), wait=2):
+        self.lights.shutter(state=state, value=value)
 
     def update_preview(self, image, crop_data: Rectangle | None = None):
         self.video_pane.object = to_pil(
@@ -403,13 +521,10 @@ class PreviewPane(param.Parameterized):
         self.camera.set_controls({"LensPosition": 0})
 
     def capture_array(self):
-        # self.shutter(True)
-        # time.sleep(10)
         self.stop()
         image = self.camera.switch_mode_and_capture_array(
             self.camera.create_still_configuration(), "main"
         )
-        self.shutter(False)
         self.camera.stop()
         self.start()
         self.still_pane.object = safe_pil_resize(
@@ -605,10 +720,8 @@ class PreviewPane(param.Parameterized):
         )
         return self.get_position()
 
-    def build_snake(self, x, y)->np.ndarray:
-        return snake(
-            cols=self.exp_plate_col_count, rows=self.exp_plate_row_count
-        ) * [
+    def build_snake(self, x, y) -> np.ndarray:
+        return snake(cols=self.exp_plate_col_count, rows=self.exp_plate_row_count) * [
             # steps
             self.exp_plate_x / self.exp_plate_row_count,
             self.exp_plate_y / self.exp_plate_col_count,
@@ -621,8 +734,9 @@ class PreviewPane(param.Parameterized):
     def check_corners(self):
         if self.check_stage() is False or self.check_homed() is False:
             return
+        self.shutter(True)
         x, y, z = self.center_on_qr_code()
-        positions = self.build_snake(x,y)
+        positions = self.build_snake(x, y)
         self.update_positions_plot(positions=positions)
         self.set_crop(
             top=self.exp_crop_top,
@@ -638,10 +752,12 @@ class PreviewPane(param.Parameterized):
             time.sleep(1)
         self.set_crop(top=0, bottom=0, left=0, right=0)
         self.move_position((x, y, z), positions=positions, index=[0])
+        self.shutter(False)
 
     def launch_acquisition(self):
         if self.check_stage() is False or self.check_homed() is False:
             return
+        self.shutter(True)
         x, y, z = self.center_on_qr_code()
         image = self.capture_array()
         cx, cy, min_x, min_y, max_x, max_y = self.get_qr_pos(image)
@@ -652,37 +768,41 @@ class PreviewPane(param.Parameterized):
             right=image.shape[1] - max_x,
         )
         z = self.get_focused_z()
-        positions = self.build_snake(x,y)
+        positions = self.build_snake(x, y)
         self.set_crop(
             top=self.exp_crop_top,
             bottom=self.exp_crop_bottom,
             left=self.exp_crop_left,
             right=self.exp_crop_right,
         )
-        exp_name = get_qr_data(self.capture_array())["info"][0]
+        exp_name = get_qr_data(self.capture_array())["info"][0].replace("_", "#")
         try:
             exp, inoc, _ = exp_name.split("_")
-            ensure_folder(DST_FLD.joinpath(exp, inoc))
         except:
-            exp, inoc = "test", "i1"
-            ensure_folder(DST_FLD.joinpath(exp, inoc))
+            exp_name = "ExpXXDMXX#I0#P00"
+            exp, inoc = "ExpXXDMXX", "I0"
 
         column_names = [i + 1 for i in range(self.exp_plate_col_count)]
         row_names = [chr(65 + i) for i in range(self.exp_plate_row_count)]
+        files = []
+        fld_images = DST_FLD.joinpath("images", exp, inoc)
+        ensure_folder(fld_images)
         for idx, (p, (c, r)) in enumerate(
-            zip(positions, list(product(column_names, row_names)))
+            zip(positions[:10], list(product(column_names, row_names)))
         ):
             self.move_position(np.append(p, z), positions=positions, index=idx)
-            file_name = f"{exp_name}#{r}#{c}#{format_datetime()}"
+            file_path = fld_images.joinpath(
+                f"{exp_name}#{r}#{c}#{format_datetime()}"
+            ).with_suffix(".png")
+            files.append(file_path)
             cv2.imwrite(
-                str(
-                    DST_FLD.joinpath(exp, inoc).joinpath(file_name).with_suffix(".png")
-                ),
-                cv2.cvtColor(self.capture_array(), cv2.COLOR_RGB2BGR),
+                str(file_path), cv2.cvtColor(self.capture_array(), cv2.COLOR_RGB2BGR)
             )
+        job_to_dataframe(files=files)
         self.update_positions_plot(positions)
         self.set_crop(top=0, bottom=0, left=0, right=0)
         self.go_rest()
+        self.shutter(False)
 
     @param.depends("act_connect_printer", watch=True)
     def on_connect_printer(self):
@@ -706,7 +826,9 @@ class PreviewPane(param.Parameterized):
 
     @param.depends("act_center_on_qr_code", watch=True)
     def on_center_on_qr_code(self):
+        self.shutter(True)
         self.center_on_qr_code()
+        self.shutter(False)
 
     @param.depends("act_check_corners", watch=True)
     def on_check_corners(self):
@@ -715,6 +837,14 @@ class PreviewPane(param.Parameterized):
     @param.depends("act_launch_acquisition", watch=True)
     def on_launch_acquisition(self):
         self.launch_acquisition()
+
+    @param.depends("act_lights_on", watch=True)
+    def on_lights_on(self):
+        self.shutter(True)
+
+    @param.depends("act_lights_off", watch=True)
+    def on_lights_off(self):
+        self.shutter(False)
 
     # MARK: UI
     def get_card(
@@ -810,11 +940,6 @@ class PreviewPane(param.Parameterized):
                         self.param.sel_printer, sizing_mode="stretch_width"
                     ),
                     self._bt_connect_printer,
-                    pn.widgets.Checkbox.from_param(
-                        self.param.exp_use_lights,
-                        name="Use lights",
-                        sizing_mode="stretch_width",
-                    ),
                 ]
                 return self.crd_init
             case SideBarCards.PLATE:
@@ -897,6 +1022,7 @@ class PreviewPane(param.Parameterized):
                 self.crd_move.objects = [
                     pn.Row(self._bt_home, self._bt_idle, self._bt_park),
                     pn.Row(self._bt_qr_code, self.bt_check_corners),
+                    pn.Row(self.bt_lights_on, self.bt_lights_off),
                     self.bt_launch_acquisition,
                 ]
                 return self.crd_move
@@ -923,7 +1049,7 @@ class PreviewPane(param.Parameterized):
             (
                 "Experiment",
                 pn.Column(
-                    pn.Row(self.plot_focus, self.plot_position, self.plot_z),
+                    pn.Row(self.plot_position, self.plot_z, self.plot_focus),
                     self.still_pane,
                 ),
             ),

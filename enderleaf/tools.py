@@ -2,6 +2,8 @@ from pathlib import Path
 from timeit import default_timer as timer
 from datetime import datetime as dt
 
+import pandas as pd
+
 
 def format_time(seconds):
     """Transforms seconds in human readable time string
@@ -38,8 +40,10 @@ def time_method(f):
     return new_function
 
 
-def format_datetime(t=dt.now()):
-    return t.strftime("%Y%m%d%H%M%S")
+def format_datetime(t=None):
+    return (
+        dt.now().strftime("%Y%m%d%H%M%S") if t is None else t.strftime("%Y%m%d%H%M%S")
+    )
 
 
 def ensure_folder(forced_path: Path, return_string: bool = False) -> str | Path:
@@ -55,3 +59,32 @@ def ensure_folder(forced_path: Path, return_string: bool = False) -> str | Path:
     if forced_path.is_dir() is False:
         forced_path.mkdir(parents=True, exist_ok=True)
     return str(forced_path) if return_string is True else forced_path
+
+
+def read_dataframe(path: Path, sep: str = ";") -> pd.DataFrame:
+    """Read dataframe from disc
+
+    Args:
+        path (Path): Path to dataframe
+        sep (str, optional): Separator. Defaults to ";".
+
+    Returns:
+        pd.DataFrame: Read dataframe
+    """
+    return pd.read_csv(filepath_or_buffer=str(path), sep=sep)
+
+
+def write_dataframe(df: pd.DataFrame, path: Path, sep: str = ";") -> pd.DataFrame:
+    """Write dataframe to disc
+
+    Args:
+        df (pd.DataFrame): Dataframe
+        path (Path): Path
+        sep (str, optional): Separator. Defaults to ";".
+
+    Returns:
+        pd.DataFrame: Written dataframe
+    """
+    ensure_folder(path.parent)
+    df.to_csv(path_or_buf=path, sep=sep, index=False)
+    return df
