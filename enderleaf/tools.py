@@ -5,6 +5,9 @@ from datetime import datetime as dt
 import pandas as pd
 
 
+TIME_FORMAT = "%Y%m%d%H%M%S"
+
+
 def format_time(seconds):
     """Transforms seconds in human readable time string
 
@@ -42,7 +45,7 @@ def time_method(f):
 
 def format_datetime(t=None):
     return (
-        dt.now().strftime("%Y%m%d%H%M%S") if t is None else t.strftime("%Y%m%d%H%M%S")
+        dt.now().strftime(TIME_FORMAT) if t is None else t.strftime(TIME_FORMAT)
     )
 
 

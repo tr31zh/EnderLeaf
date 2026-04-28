@@ -218,10 +218,23 @@ def canny(
 
 
 def find_circles(edges, radii, max_circles: int = 3):
-    return hough_circle_peaks(
+    accus, xs, ys, raddi = hough_circle_peaks(
         hough_circle(edges, radii),
         radii,
         total_num_peaks=max_circles,
         min_xdistance=radii.max(),
         min_ydistance=radii.max(),
     )
+    return [[a, x, y, r] for a, x, y, r in zip(accus, xs, ys, raddi)]
+
+
+def filter_circles(circles, img_width, img_height):
+    if len(circles) == 1:
+        return {"accepted": circles, "discarded": []}
+    accepted, discarded = [], []
+    for accu, cx, cy, r in circles:
+        if cx + r > img_width or cx - r < 0 or cy + r > img_height or cy - r < 0:
+            discarded.append([accu, cx, cy, r])
+        else:
+            accepted.append([accu, cx, cy, r])
+    return {"accepted": accepted, "discarded": discarded}

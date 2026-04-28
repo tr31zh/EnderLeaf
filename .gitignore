@@ -224,3 +224,4 @@ qr_images
 *.jpg
 .virtual_documents
 *.csv
+.vscode/settings.json
