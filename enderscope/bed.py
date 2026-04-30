@@ -9,8 +9,8 @@ class Bed:
     rest_height: int = 100
     individual_height: int = 36
 
-    qr_start_x = 30
-    qr_start_y = 30
+    qr_start_x = 15
+    qr_start_y = 25
 
     row_count: int = 9
     col_count: int = 9

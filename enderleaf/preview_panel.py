@@ -700,13 +700,14 @@ class PreviewPane(param.Parameterized):
 
         return bestZ + self.exp_focus_start_z
     
-    def get_qr_data(self, image):
+    def get_qr_data(self, image:np.ndarray|None=None):
+        if image is None:
+            image = self.capture_array()[0]
         qr_data = get_qr_data(image)
         if qr_data["retval"] is False:
-            old_lights_state = self._is_lights_on
             self.toggle_lights()
             time.sleep(2)
-            qr_data = get_qr_data(image)
+            qr_data = get_qr_data(self.capture_array()[0])
             self.toggle_lights()
             time.sleep(2)
         return qr_data
