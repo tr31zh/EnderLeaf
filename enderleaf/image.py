@@ -20,6 +20,11 @@ class Rectangle:
             f"left:{self.left}|right:{self.right}|top:{self.top}|bottom:{self.bottom}"
         )
 
+    @classmethod
+    def from_circle(cls, circle):
+        cx, cy, r = circle
+        return cls(cy - r, cy + r, cx - r, cx + r)
+
     def empty(self) -> bool:
         return (
             self.top is None

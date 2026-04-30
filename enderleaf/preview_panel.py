@@ -699,8 +699,8 @@ class PreviewPane(param.Parameterized):
         self.plot_focus.object = fig
 
         return bestZ + self.exp_focus_start_z
-    
-    def get_qr_data(self, image:np.ndarray|None=None):
+
+    def get_qr_data(self, image: np.ndarray | None = None):
         if image is None:
             image = self.capture_array()[0]
         qr_data = get_qr_data(image)
@@ -712,7 +712,7 @@ class PreviewPane(param.Parameterized):
             time.sleep(2)
         return qr_data
 
-    def get_qr_pos(self,image):
+    def get_qr_pos(self, image):
         qr_data = self.get_qr_data(image)
         if qr_data["retval"] is False:
             raise ValueError("Unable to detect QR code")
@@ -808,7 +808,9 @@ class PreviewPane(param.Parameterized):
             left=self.exp_crop_left,
             right=self.exp_crop_right,
         )
-        exp_name = self.get_qr_data(self.capture_array()[0])["info"][0].replace("_", "#")
+        exp_name = self.get_qr_data(self.capture_array()[0])["info"][0].replace(
+            "_", "#"
+        )
         try:
             exp, inoc, plate = exp_name.split("#")
         except:
@@ -847,6 +849,7 @@ class PreviewPane(param.Parameterized):
                         | {"job_ts": start_ts}
                         | extract_metadata(metadata=metadata)
                         | {
+                            "height": [z],
                             "lights": [self._is_lights_on],
                             "crop_top": [self.exp_crop_top],
                             "crop_bottom": [self.exp_crop_bottom],
