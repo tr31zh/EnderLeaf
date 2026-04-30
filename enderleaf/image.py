@@ -222,19 +222,23 @@ def find_circles(edges, radii, max_circles: int = 3):
         hough_circle(edges, radii),
         radii,
         total_num_peaks=max_circles,
-        min_xdistance=radii.max(),
-        min_ydistance=radii.max(),
+        min_xdistance=round(radii.max() * 1.8),
+        min_ydistance=round(radii.max() * 1.8),
     )
     return [[a, x, y, r] for a, x, y, r in zip(accus, xs, ys, raddi)]
 
 
 def filter_circles(circles, img_width, img_height):
-    if len(circles) == 1:
-        return {"accepted": circles, "discarded": []}
-    accepted, discarded = [], []
+    accepted, discarded_position, discarded_accu = [], [], []
     for accu, cx, cy, r in circles:
         if cx + r > img_width or cx - r < 0 or cy + r > img_height or cy - r < 0:
-            discarded.append([accu, cx, cy, r])
+            discarded_position.append([accu, cx, cy, r])
+        elif accu < 0.15:
+            discarded_accu.append([accu, cx, cy, r])
         else:
             accepted.append([accu, cx, cy, r])
-    return {"accepted": accepted, "discarded": discarded}
+    return {
+        "accepted": accepted,
+        "discarded_position": discarded_position,
+        "discarded_accu": discarded_accu,
+    }

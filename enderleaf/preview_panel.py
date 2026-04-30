@@ -369,7 +369,7 @@ class PreviewPane(param.Parameterized):
             icon_size="2em",
             sizing_mode="stretch_width",
         )
-        self._lights_on = False
+        self._is_lights_on = False
         self.crd_init = pn.layout.Card(
             objects=[], title=SideBarCards.INIT.value, collapsed=False
         )
@@ -445,7 +445,7 @@ class PreviewPane(param.Parameterized):
             return image
 
     def shutter(self, state: bool, value: list | tuple = (255, 255, 255), wait=2):
-        self._lights_on = state
+        self._is_lights_on = state
         self.lights.shutter(state=state, value=value)
         controls = (
             {
@@ -459,6 +459,9 @@ class PreviewPane(param.Parameterized):
             else {"AeEnable": True, "AwbEnable": True}
         )
         self.camera.set_controls(controls)
+
+    def toggle_lights(self):
+        self.shutter(not self._is_lights_on)
 
     def update_preview(self, image, crop_data: Rectangle | None = None):
         self.video_pane.object = to_pil(
@@ -696,10 +699,20 @@ class PreviewPane(param.Parameterized):
         self.plot_focus.object = fig
 
         return bestZ + self.exp_focus_start_z
-
-    @staticmethod
-    def get_qr_pos(image):
+    
+    def get_qr_data(self, image):
         qr_data = get_qr_data(image)
+        if qr_data["retval"] is False:
+            old_lights_state = self._is_lights_on
+            self.toggle_lights()
+            time.sleep(2)
+            qr_data = get_qr_data(image)
+            self.toggle_lights()
+            time.sleep(2)
+        return qr_data
+
+    def get_qr_pos(self,image):
+        qr_data = self.get_qr_data(image)
         if qr_data["retval"] is False:
             raise ValueError("Unable to detect QR code")
         min_x, min_y, max_x, max_y = get_points_extremes(points=qr_data["points"][0])
@@ -794,7 +807,7 @@ class PreviewPane(param.Parameterized):
             left=self.exp_crop_left,
             right=self.exp_crop_right,
         )
-        exp_name = get_qr_data(self.capture_array()[0])["info"][0].replace("_", "#")
+        exp_name = self.get_qr_data(self.capture_array()[0])["info"][0].replace("_", "#")
         try:
             exp, inoc, plate = exp_name.split("#")
         except:
@@ -833,7 +846,7 @@ class PreviewPane(param.Parameterized):
                         | {"job_ts": start_ts}
                         | extract_metadata(metadata=metadata)
                         | {
-                            "lights": [self._lights_on],
+                            "lights": [self._is_lights_on],
                             "crop_top": [self.exp_crop_top],
                             "crop_bottom": [self.exp_crop_bottom],
                             "crop_left": [self.exp_crop_left],
