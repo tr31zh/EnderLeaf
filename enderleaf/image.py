@@ -4,8 +4,12 @@ from dataclasses import dataclass
 import numpy as np
 import cv2
 from PIL import Image, ImageOps
+
+from scipy.spatial.transform import Rotation as R
 from skimage import color
 from skimage.transform import hough_circle, hough_circle_peaks
+from skimage.feature import SIFT, match_descriptors
+
 
 
 @dataclass
@@ -247,3 +251,108 @@ def filter_circles(circles, img_width, img_height):
         "discarded_position": discarded_position,
         "discarded_accu": discarded_accu,
     }
+
+def rotate_image(image, angle):
+    if angle in [None, 0]:
+        return image
+    else:
+        (h, w) = image.shape[:2]
+        return cv2.warpAffine(
+            image, cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0), (w, h)
+        )
+
+
+def find_matches(
+    previous_image,
+    current_image,
+    previous_mask=None,
+    current_mask=None,
+    safe_ratio: float = 0.5,
+):
+    desc_extractor = SIFT()
+    # Previous image
+    masked_previous_image = cv2.equalizeHist(
+        cv2.cvtColor(
+            cv2.bitwise_and(previous_image, previous_image, mask=previous_mask),
+            cv2.COLOR_RGB2GRAY,
+        )
+    )
+    desc_extractor.detect_and_extract(masked_previous_image)
+    kp_previous = desc_extractor.keypoints
+    desc_previous = desc_extractor.descriptors
+    # Current image
+    masked_current_image = cv2.equalizeHist(
+        cv2.cvtColor(
+            cv2.bitwise_and(current_image, current_image, mask=current_mask),
+            cv2.COLOR_RGB2GRAY,
+        )
+    )
+    desc_extractor.detect_and_extract(masked_current_image)
+    kp_current = desc_extractor.keypoints
+    desc_current = desc_extractor.descriptors
+    # Find matches
+    matches = match_descriptors(
+        desc_previous, desc_current, max_ratio=0.8, cross_check=True
+    )
+    matches_previous = kp_previous[matches[:, 0]]
+    matches_current = kp_current[matches[:, 1]]
+    distances = np.array(
+        [np.linalg.norm(p1 - p2) for p1, p2 in zip(matches_previous, matches_current)]
+    )
+    median_dist = np.median(distances)
+    if median_dist == 0:
+        median_dist = np.median(np.unique(distances))
+    matches_filter = (distances <= median_dist / safe_ratio) & (
+        distances >= median_dist * safe_ratio
+    )
+    matches_previous = matches_previous[matches_filter]
+    matches_current = matches_current[matches_filter]
+
+    return matches_previous, matches_current
+
+
+def find_rotation_anlge(
+    previous_image,
+    current_image,
+    previous_mask=None,
+    current_mask=None,
+    safe_ratio: float = 0.5,
+):
+    matches_previous, matches_current = find_matches(
+        previous_image=previous_image,
+        previous_mask=previous_mask,
+        current_image=current_image,
+        current_mask=current_mask,
+        safe_ratio=safe_ratio,
+    )
+    rot, *_ = R.align_vectors(
+        np.pad(
+            matches_previous - matches_previous.mean(axis=0),
+            pad_width=[0, 1],
+            mode="constant",
+        ),
+        np.pad(
+            matches_current - matches_current.mean(axis=0),
+            pad_width=[0, 1],
+            mode="constant",
+        ),
+        return_sensitivity=True,
+    )
+    return rot.as_euler("zyx", degrees=True)[0]
+
+
+def match_previous_rotation(
+    previous_image,
+    current_image,
+    previous_mask=None,
+    current_mask=None,
+    safe_ratio: float = 0.5,
+):
+    angle = find_rotation_anlge(
+        previous_image=previous_image,
+        previous_mask=previous_mask,
+        current_image=current_image,
+        current_mask=current_mask,
+        safe_ratio=safe_ratio,
+    )
+    return rotate_image(current_image, angle=angle)
