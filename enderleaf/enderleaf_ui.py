@@ -26,14 +26,9 @@ import panel as pn
 
 from enderscope.serial import list_ports, default_printer_port, Stage
 from enderscope.enderlights_pi import Enderlights
-from enderscope.scan_patterns import snake, plot_path, get_extremes, plot_path_status
+from enderscope.scan_patterns import snake, get_extremes, plot_path_status
 from enderscope.bed import bed
-from enderleaf.tools import (
-    ensure_folder,
-    format_datetime,
-    write_dataframe,
-    read_dataframe,
-)
+from enderleaf.tools import ensure_folder, format_datetime, write_dataframe
 from enderleaf.image import to_pil, safe_pil_resize, crop_image, Rectangle, lap_var
 from enderleaf.qr_reader import get_qr_data, get_points_extremes
 
@@ -169,7 +164,7 @@ def update_panel(preview):
             break
 
 
-class PreviewPane(param.Parameterized):
+class EnderLeafUi(param.Parameterized):
     # MARK: PARAMS
     # Camera
     sensor_modes = param.Selector(default=2)
@@ -274,12 +269,15 @@ class PreviewPane(param.Parameterized):
         super().__init__(**params)
         self._working = False
         self._sidebar_width = 300
+        self._last_job_data = []
         # Camera
         self._started = False
         self.stop_event = Event()
         self.output = None
         self.camera = Picamera2()
-        self.video_pane = pn.pane.Image(sizing_mode="stretch_width")
+        self.video_pane = pn.pane.Image(
+            sizing_mode="stretch_width", enable_streaming=True
+        )
         self.still_pane = pn.pane.Image(sizing_mode="stretch_width")
         self.camera_config = pn.pane.JSON(
             object=None, name="Camera configuration", depth=-1
@@ -396,13 +394,6 @@ class PreviewPane(param.Parameterized):
         )
         self._positions = []
 
-        # Misc
-        self._counter = 0
-        self._debugger = pn.pane.Placeholder("Debugger", sizing_mode="stretch_width")
-        self._debug_counter = pn.pane.Placeholder(
-            "Debug counter", sizing_mode="stretch_width"
-        )
-
     # MARK: Preview
     def apply_image_crop(self, image, crop_data: Rectangle | None = None):
         try:
@@ -467,11 +458,6 @@ class PreviewPane(param.Parameterized):
         self.video_pane.object = to_pil(
             self.apply_image_crop(image=image, crop_data=crop_data)
         )
-
-    def update_debugger(self, data):
-        self._counter += 1
-        self._debugger.object = data
-        self._debug_counter.object = self._counter
 
     def set_crop(self, left, right, top, bottom):
         self.cam_crop_left = left
@@ -817,9 +803,8 @@ class PreviewPane(param.Parameterized):
             exp_name = "Exp00DM00#I0#P00"
             exp, inoc, plate = exp_name.split("#")
 
-        column_names = [i + 1 for i in range(self.exp_plate_col_count)]
-        row_names = [chr(65 + i) for i in range(self.exp_plate_row_count)]
         files = []
+        self._last_job_data = []
         df = pd.DataFrame()
 
         fld_images = DST_FLD.joinpath("images", exp, inoc)
@@ -832,7 +817,26 @@ class PreviewPane(param.Parameterized):
         ).with_suffix(".csv")
 
         for idx, (p, (c, r)) in enumerate(
-            zip(self._positions, list(product(column_names, row_names)))
+            zip(
+                self._positions,
+                [
+                    (
+                        # Since we use a snake pattern row index must be updated  when
+                        # column is a even number
+                        chr(
+                            65 + (r if c % 2 == 1 else self.exp_plate_row_count - 1 - r)
+                        ),
+                        c,  # Column does not need update
+                    )
+                    for c, r in list(
+                        # Use product to genarate the col row combinations
+                        product(
+                            [i + 1 for i in range(self.exp_plate_col_count)],
+                            [i for i in range(self.exp_plate_row_count)],
+                        )
+                    )
+                ],
+            )
         ):
             self.move_position(np.append(p, z), index=idx)
             file_path = fld_images.joinpath(
@@ -840,25 +844,22 @@ class PreviewPane(param.Parameterized):
             ).with_suffix(".png")
             files.append(file_path)
             image, metadata = self.capture_array()
-            cv2.imwrite(str(file_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-            df = pd.concat(
-                [
-                    df,
-                    pd.DataFrame(
-                        expand_file_path(file_path)
-                        | {"job_ts": start_ts}
-                        | extract_metadata(metadata=metadata)
-                        | {
-                            "height": [z],
-                            "lights": [self._is_lights_on],
-                            "crop_top": [self.exp_crop_top],
-                            "crop_bottom": [self.exp_crop_bottom],
-                            "crop_left": [self.exp_crop_left],
-                            "crop_right": [self.exp_crop_right],
-                        }
-                    ),
-                ]
+            metadata = (
+                expand_file_path(file_path)
+                | {"job_ts": start_ts}
+                | extract_metadata(metadata=metadata)
+                | {
+                    "height": [z],
+                    "lights": [self._is_lights_on],
+                    "crop_top": [self.exp_crop_top],
+                    "crop_bottom": [self.exp_crop_bottom],
+                    "crop_left": [self.exp_crop_left],
+                    "crop_right": [self.exp_crop_right],
+                }
             )
+            self._last_job_data.append((image, metadata))
+            cv2.imwrite(str(file_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+            df = pd.concat([df, pd.DataFrame(metadata)])
         write_dataframe(df, data_file_name)
         self.update_positions_plot()
         self.set_crop(top=0, bottom=0, left=0, right=0)
@@ -1141,7 +1142,6 @@ class PreviewPane(param.Parameterized):
                     active=[0],
                 ),
             ),
-            ("Debugger", pn.Column(self._debug_counter, self._debugger)),
             active=0,
         )
 
@@ -1150,29 +1150,33 @@ class PreviewPane(param.Parameterized):
         sidebar.width = self._sidebar_width
         return pn.Row(sidebar, self.main())
 
+    @property
+    def last_job_data(self):
+        return self._last_job_data
 
-_preview = None
+
+_ender_leaf = None
 
 
 def post_callback(request):
-    global _preview
-    if _preview._working is True:
+    global _ender_leaf
+    if _ender_leaf._working is True:
         return
-    _preview._working = True
+    _ender_leaf._working = True
     try:
         metadata = request.get_metadata()
         metadata = dict(sorted(metadata.items()))
-        _preview.camera_config.object = metadata
-        _preview.focus_distance = metadata["LensPosition"]
-        _preview.focus_mode = metadata["AfState"]
+        _ender_leaf.camera_config.object = metadata
+        _ender_leaf.focus_distance = metadata["LensPosition"]
+        _ender_leaf.focus_mode = metadata["AfState"]
     finally:
-        _preview._working = False
+        _ender_leaf._working = False
 
 
-def preview():
-    global _preview
-    if _preview is None:
-        _preview = PreviewPane()
-        _preview.camera.post_callback = post_callback
-        _preview.start()
-    return _preview
+def ender_leaf():
+    global _ender_leaf
+    if _ender_leaf is None:
+        _ender_leaf = EnderLeafUi()
+        _ender_leaf.camera.post_callback = post_callback
+        _ender_leaf.start()
+    return _ender_leaf
