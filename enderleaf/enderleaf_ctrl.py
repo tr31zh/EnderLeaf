@@ -5,6 +5,7 @@ from threading import Thread, Condition, Event
 from enum import Enum
 import time
 import io
+from typing import Literal
 
 import numpy as np
 import cv2
@@ -33,6 +34,12 @@ class CropMode(Enum):
     CROP = "Cropped image"
     LINES = "Crop lines"
     IGNORE = "Ignore"
+
+
+class CameraMode(Enum):
+    IDLE = "idle"
+    VIDEO = "video"
+    STILL = "still"
 
 
 def expand_file_path(file_path: Path, use_file_ts: bool = False):
@@ -98,10 +105,14 @@ class EnderLeafController(object):
         self.parent = parent
         self._last_job_data = []
         # Camera
-        self._started = False
         self.stop_event = Event()
         self.output = None
         self.camera = Picamera2()
+        self._video_conf = self.camera.create_video_configuration(
+            raw=self.camera.sensor_modes[2], main={"preserve_ar": False}
+        )
+        self._still_conf = self.camera.create_still_configuration()
+        self._camera_mode = CameraMode.IDLE
 
         self.crop_left = 0
         self.crop_right = 0
@@ -276,14 +287,21 @@ class EnderLeafController(object):
         self.camera.set_controls({"LensPosition": 0})
 
     def capture_array(self):
-        self.stop()
-        image = self.camera.switch_mode_and_capture_array(
-            self.camera.create_still_configuration(), "main"
-        )
-        metadata = self.camera.capture_metadata()
-        self.camera.stop()
-        self.start()
-        self.parent.on_still_captured(self.apply_image_crop(image=image))
+        match self._camera_mode:
+            case CameraMode.VIDEO:
+                self.stop()
+                image = self.camera.switch_mode_and_capture_array(self._still_conf, "main")
+                metadata = self.camera.capture_metadata()
+                self.camera.stop()
+                self.start()
+            case CameraMode.STILL:
+                image = self.camera.capture_array("main")
+                metadata = self.camera.capture_metadata()
+            case CameraMode.IDLE:
+                return
+            
+        if self.parent is not None:
+            self.parent.on_still_captured(self.apply_image_crop(image=image))
 
         return (
             crop_image(
@@ -298,31 +316,44 @@ class EnderLeafController(object):
             metadata,
         )
 
+    def switch_mode(
+        self, new_mode: Literal[CameraMode.IDLE, CameraMode.VIDEO, CameraMode.STILL]
+    ):
+        if new_mode == self._camera_mode:
+            return
+        match new_mode:
+            case CameraMode.IDLE:
+                self.stop()
+            case CameraMode.VIDEO:
+                self.camera.switch_mode(self._video_conf)
+            case CameraMode.STILL:
+                self.stop()
+                self.camera.switch_mode(self._still_conf)
+        self._camera_mode = new_mode
+
     def start(self):
-        if self._started is False:
-            self.stop_event.clear()
-            mode = self.camera.sensor_modes[2]
-            self.camera.configure(
-                self.camera.create_video_configuration(
-                    raw=mode, main={"preserve_ar": False}
-                )
-            )
+        if self._camera_mode != CameraMode.VIDEO:
+            if self.parent is not None:
+                self.stop_event.clear()
+            self.camera.configure(self._video_conf)
             self.output = StreamingOutput()
             self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
             self.camera.start_recording(JpegEncoder(), FileOutput(self.output))
-            self.thread = Thread(target=self.update_parent_preview)
-            self.thread.start()
+            if self.parent is not None:
+                self.thread = Thread(target=self.update_parent_preview)
+                self.thread.start()
             time.sleep(0.5)
-            self._started = True
+            self._camera_mode = CameraMode.VIDEO
 
     def stop(self):
-        if self._started is True:
-            self.stop_event.set()
-            self.thread.join()
+        if self._camera_mode != CameraMode.IDLE:
+            if self.parent is not None:
+                self.stop_event.set()
+                self.thread.join()
             self.camera.stop_recording()
             self.output.close()
             self.camera.stop()
-            self._started = False
+            self._camera_mode = CameraMode.IDLE
 
     def check_stage(self):
         return self._stage is not None
@@ -342,17 +373,26 @@ class EnderLeafController(object):
         if self.printer_ready() is False:
             return
         self._stage.finish_moves()
-        self.parent.on_z_moved(self.get_position()[2])
+        if self.parent is not None:
+            self.parent.on_z_moved(self.get_position()[2])
 
-    def update_positions_plot(self, index: int | None = None):
-        return plot_path_status(
-            path=self._positions, circle_diam=17, highlighted_indexes=index
-        )
+    def update_positions_plot(self, index: int | list | None = None):
+        if self.parent is None:
+            return
+        if len(self._positions) == 0:
+            self.parent.update_position_plot(None)
+        else:
+            self.parent.update_position_plot(
+                plot_path_status(
+                    path=self._positions, circle_diam=17, highlighted_indexes=index
+                )
+            )
 
     def move_position(self, position, index: int | None = None):
         if self.printer_ready() is False:
             return
         self._stage.move_position(position)
+        self.update_positions_plot(index=index)
         self.finish_moves()
 
     def move_absolute(self, x, y, z):
@@ -415,20 +455,21 @@ class EnderLeafController(object):
 
         self.move_position([pos[0], pos[1], self.focus_start_z])
 
-        fig = Figure(figsize=(4, 4))
-        ax = fig.subplots(nrows=1, ncols=1)
-        fig.suptitle("Variance")
-        ax.plot(list(variances.keys()), list(variances.values()))
-        ax.add_patch(
-            Circle(
-                xy=(pos[2] + bestZ, variances[pos[2] + bestZ]),
-                radius=1,
-                edgecolor="lime",
-                facecolor="lime",
-                linewidth=1,
+        if self.parent is not None:
+            fig = Figure(figsize=(4, 4))
+            ax = fig.subplots(nrows=1, ncols=1)
+            fig.suptitle("Variance")
+            ax.plot(list(variances.keys()), list(variances.values()))
+            ax.add_patch(
+                Circle(
+                    xy=(pos[2] + bestZ, variances[pos[2] + bestZ]),
+                    radius=1,
+                    edgecolor="lime",
+                    facecolor="lime",
+                    linewidth=1,
+                )
             )
-        )
-        self.parent.update_focus_plot(fig)
+            self.parent.update_focus_plot(fig)
 
         return bestZ + self.focus_start_z
 
@@ -451,12 +492,13 @@ class EnderLeafController(object):
         min_x, min_y, max_x, max_y = get_points_extremes(points=qr_data["points"][0])
         return (min_x + max_x) // 2, (min_y + max_y) // 2, min_x, min_y, max_x, max_y
 
-    def move_to(self, position: int | None = None):
-        if not self._positions:
+    def move_to(self, position: int):
+        if len(self._positions) == 0:
             return
         position -= 1
         x, y = self._positions[position]
         self.move_position((x, y), index=[position])
+        self.capture_array()
 
     def build_snake(self, x, y) -> np.ndarray:
         self._positions = snake(
@@ -470,6 +512,7 @@ class EnderLeafController(object):
             x,
             y,
         ]
+        self.update_positions_plot(index=[1])
 
     def center_on_qr_code(self, step_val=10):
         if self.printer_ready() is False:
@@ -518,7 +561,7 @@ class EnderLeafController(object):
         x, y, z = self.center_on_qr_code()
         self.backup_crop_values()
         try:
-            self.set_crop(0,0,0,0)
+            self.set_crop(0, 0, 0, 0)
             image, _ = self.capture_array()
             cx, cy, min_x, min_y, max_x, max_y = self.get_qr_pos(image)
             self.set_crop(
@@ -597,6 +640,7 @@ class EnderLeafController(object):
             df = pd.concat([df, pd.DataFrame(metadata)])
         write_dataframe(df, data_file_name)
         self.update_positions_plot()
+
         self.go_rest()
 
     @property

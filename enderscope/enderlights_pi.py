@@ -1,24 +1,60 @@
 from enum import Enum
-from typing import Literal
+from typing import Literal, Any
+from collections import namedtuple
+from dataclasses import dataclass
 
 import board
 import neopixel
 
-PIN = board.D18
-LED_COUNT = 16
-
 
 class CardPoint(Enum):
-    NORTH = (0, LED_COUNT // 4 - 1)
-    EAST = (LED_COUNT // 4, LED_COUNT // 2 - 1)
-    SOUTH = (LED_COUNT // 2, LED_COUNT // 4 * 3 - 1)
-    WEST = (LED_COUNT // 4 * 3, LED_COUNT - 1)
+    NORTH = "NORTH"
+    EAST = "EAST"
+    SOUTH = "SOUTH"
+    WEST = "WEST"
 
+@dataclass
+class LedData:
+    pin: Any
+    led_count: int
+
+    def cardinal(self, cardinal_point:Literal[
+            CardPoint.NORTH, CardPoint.SOUTH, CardPoint.EAST, CardPoint.WEST
+        ]):
+        match cardinal_point:
+            case CardPoint.NORTH:
+                return self.north
+            case CardPoint.EAST:
+                return self.east
+            case CardPoint.SOUTH:
+                return self.south
+            case CardPoint.WEST:
+                return self.west
+
+    @property
+    def north(self):
+        return (0, self.led_count // 4 - 1)
+
+    @property
+    def east(self):
+        return (self.led_count // 4, self.led_count // 2 - 1)
+
+    @property
+    def south(self):
+        return (self.led_count // 2, self.led_count // 4 * 3 - 1)
+
+    @property
+    def west(self):
+        return (self.led_count // 4 * 3, self.led_count - 1)
+
+
+# Grrove LED PIN 18, 16 LEDs
+# Hobby LED PIN XX, 12 LEDs
 
 class Enderlights:
-    def __init__(self, pin=PIN, led_count: int = LED_COUNT):
-        self.pixels = neopixel.NeoPixel(PIN, led_count)
-        self.led_count = led_count
+    def __init__(self, led_data: LedData = LedData(pin=board.D18, led_count=16)):
+        self.led_data = led_data
+        self.pixels = neopixel.NeoPixel(self.led_data.pin, self.led_data.led_count)
 
     def __getitem__(self, index):
         return self.pixels[index]
@@ -39,15 +75,15 @@ class Enderlights:
             self.fill((0, 0, 0))
 
     def red(self, value):
-        for i in range(self.led_count):
+        for i in range(self.led_data.led_count):
             self[i] = (value, self[i][1], self[i][2])
 
     def green(self, value):
-        for i in range(self.led_count):
+        for i in range(self.led_data.led_count):
             self[i] = (self[i][0], value, self[i][2])
 
     def blue(self, value):
-        for i in range(self.led_count):
+        for i in range(self.led_data.led_count):
             self[i] = (self[i][0], self[i][0], value)
 
     def set_cardinal(
@@ -57,13 +93,13 @@ class Enderlights:
         ],
         value: tuple,
     ):
-        start, end = card_point.value
+        start, end = self.led_data.cardinal(cardinal_point=card_point)
         self[start : end + 1] = (end - start + 1) * [value]
 
 
-def cycle(lights, size, step, value=(255, 255, 255)):
-    for i in range(0, lights.led_count, step):
+def cycle(lights:Enderlights, size, step, value=(255, 255, 255)):
+    for i in range(0, lights.led_data.led_count, step):
         lights.shutter(False)
-        start, stop = i, min(i + size, lights.led_count)
+        start, stop = i, min(i + size, lights.led_data.led_count)
         lights[start:stop] = size * [value]
         yield start, stop

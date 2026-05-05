@@ -236,12 +236,14 @@ class EnderLeafUi(param.Parameterized):
             icon="bulb",
             icon_size="2em",
             sizing_mode="stretch_width",
+            button_type="default",
         )
         self.bt_lights_off = pn.widgets.Button.from_param(
             self.param.act_lights_off,
             icon="bulb-off",
             icon_size="2em",
             sizing_mode="stretch_width",
+            button_type="success",
         )
         self.crd_init = pn.layout.Card(
             objects=[], title=SideBarCards.INIT.value, collapsed=False
@@ -373,13 +375,11 @@ class EnderLeafUi(param.Parameterized):
     def on_z_moved(self, z):
         self.plot_z.value = z
 
-    def update_positions_plot(self, index: int | None = None):
-        self.plot_position.object = self.controller.update_positions_plot(index)
+    def update_position_plot(self, new_plot):
+        self.plot_position.object = new_plot
 
     def move_position(self, position, index: int | None = None):
         self.controller.move_position(position, index)
-        if index is not None:
-            self.update_positions_plot(index=index)
 
     def move_absolute(self, x, y, z):
         self.controller.move_absolute(x, y, z)
@@ -404,7 +404,6 @@ class EnderLeafUi(param.Parameterized):
         self.param.sel_position.objects = [
             i + 1 for i in list(range(len(self.controller._positions)))
         ]
-        self.update_positions_plot()
 
     def center_on_qr_code(self, step_val=10):
         x, y, z = self.controller.center_on_qr_code(step_val=step_val)
@@ -448,14 +447,18 @@ class EnderLeafUi(param.Parameterized):
     @param.depends("act_lights_on", watch=True)
     def on_lights_on(self):
         self.controller.shutter(True)
+        self.bt_lights_on.button_type ="success"
+        self.bt_lights_off.button_type ="default"
 
     @param.depends("act_lights_off", watch=True)
     def on_lights_off(self):
         self.controller.shutter(False)
+        self.bt_lights_on.button_type ="default"
+        self.bt_lights_off.button_type ="success"
 
     @param.depends("act_move_to", watch=True)
     def on_move_to(self):
-        self.controller.move_to()
+        self.controller.move_to(self.sel_position)
 
     # MARK: UI
     def get_card(
@@ -472,11 +475,11 @@ class EnderLeafUi(param.Parameterized):
         match kind:
             case SideBarCards.PREVIEW:
                 self.crd_preview.objects = [
-                    pn.widgets.Select.from_param(
-                        self.param.sensor_modes,
-                        name="Sensor mode",
-                        sizing_mode="stretch_width",
-                    ),
+                    # pn.widgets.Select.from_param(
+                    #     self.param.sensor_modes,
+                    #     name="Sensor mode",
+                    #     sizing_mode="stretch_width",
+                    # ),
                     pn.widgets.Button.from_param(
                         self.param.act_capture_still, sizing_mode="stretch_width"
                     ),
