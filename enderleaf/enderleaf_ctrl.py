@@ -36,7 +36,7 @@ class CropMode(Enum):
     IGNORE = "Ignore"
 
 
-class CameraMode(Enum):
+class CameraState(Enum):
     IDLE = "idle"
     VIDEO = "video"
     STILL = "still"
@@ -101,8 +101,7 @@ class StreamingOutput(io.BufferedIOBase):
 
 
 class EnderLeafController(object):
-    def __init__(self, parent):
-        self.parent = parent
+    def __init__(self):
         self._last_job_data = []
         # Camera
         self.stop_event = Event()
@@ -112,29 +111,37 @@ class EnderLeafController(object):
             raw=self.camera.sensor_modes[2], main={"preserve_ar": False}
         )
         self._still_conf = self.camera.create_still_configuration()
-        self._camera_mode = CameraMode.IDLE
+        self._camera_state = CameraState.IDLE
 
-        self.crop_left = 0
-        self.crop_right = 0
-        self.crop_top = 0
-        self.crop_bottom = 0
-        self.crop_mode = CropMode.LINES
+        self.crop_left = 1200
+        self.crop_right = 1200
+        self.crop_top = 400
+        self.crop_bottom = 350
+        self.crop_mode = CropMode.LINES.value
         self._old_crop_values = -1, -1, -1, -1
 
-        self.plate_x = 0
-        self.plate_y = 0
-        self.plate_row_count = 0
-        self.plate_col_count = 0
-        self.focus_start_z = 0
-        self.focus_delta_z = 0
+        self.plate_x = 200
+        self.plate_y = 200
+        self.plate_row_count = 9
+        self.plate_col_count = 9
+        self.focus_start_z = 36
+        self.focus_delta_z = 10
 
         self._homed = False
         self._stage = None
-        self.lights = Enderlights()
-        self.lights.shutter(False)
+        self.top_lights = Enderlights()
+        self.top_lights.shutter(False)
         self._is_lights_on = False
 
         self._positions = []
+
+        # Callbacks
+        self.update_preview = None
+        self.update_still = None
+        self.update_z_pos = None
+        self.update_position_plot = None
+        self.update_focus_plot = None
+        self.update_positions = None
 
     def backup_crop_values(self):
         self._old_crop_values = (
@@ -149,8 +156,12 @@ class EnderLeafController(object):
             self._old_crop_values
         )
 
-    def update_parent_preview(self):
+    def call_update_preview(self):
         while True:
+            if self.stop_event.is_set() is True or self.output.closed is True:
+                break
+            if self.update_preview is None:
+                continue
             with self.output.condition:
                 self.output.condition.wait()
                 # print("exited", flush=True)
@@ -169,7 +180,7 @@ class EnderLeafController(object):
                     cam_conf["raw"]["size"][0],
                     cam_conf["raw"]["size"][1],
                 )
-                self.parent.update_preview(
+                self.update_preview(
                     image=self.apply_image_crop(
                         image=image,
                         crop_data=Rectangle(
@@ -182,9 +193,6 @@ class EnderLeafController(object):
                         ),
                     )
                 )
-
-            if self.stop_event.is_set() is True or self.output.closed is True:
-                break
 
     def apply_image_crop(self, image, crop_data: Rectangle | None = None):
         crop_data = (
@@ -219,6 +227,8 @@ class EnderLeafController(object):
                     )
                 case CropMode.IGNORE:
                     pass
+                case _:
+                    raise NotImplementedError(f"Unknown case {self.crop_mode}")
         return image
 
     def set_crop(self, left, right, top, bottom, crop_mode: CropMode | None = None):
@@ -247,7 +257,7 @@ class EnderLeafController(object):
 
     def shutter(self, state: bool, value: list | tuple = (255, 255, 255), wait=2):
         self._is_lights_on = state
-        self.lights.shutter(state=state, value=value)
+        self.top_lights.shutter(state=state, value=value)
         controls = (
             {
                 "AeEnable": False,
@@ -277,6 +287,7 @@ class EnderLeafController(object):
 
     def autofocus_cycle(self):
         self.camera.autofocus_cycle()
+        self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
 
     def set_focus_close(self):
         self.camera.set_controls(
@@ -287,21 +298,22 @@ class EnderLeafController(object):
         self.camera.set_controls({"LensPosition": 0})
 
     def capture_array(self):
-        match self._camera_mode:
-            case CameraMode.VIDEO:
-                self.stop()
-                image = self.camera.switch_mode_and_capture_array(self._still_conf, "main")
-                metadata = self.camera.capture_metadata()
-                self.camera.stop()
-                self.start()
-            case CameraMode.STILL:
+        match self._camera_state:
+            case CameraState.VIDEO:
+                self.switch_state(CameraState.STILL)
                 image = self.camera.capture_array("main")
                 metadata = self.camera.capture_metadata()
-            case CameraMode.IDLE:
+                self.switch_state(CameraState.VIDEO)
+            case CameraState.STILL:
+                image = self.camera.capture_array("main")
+                metadata = self.camera.capture_metadata()
+            case CameraState.IDLE:
                 return
-            
-        if self.parent is not None:
-            self.parent.on_still_captured(self.apply_image_crop(image=image))
+            case _:
+                raise NotImplementedError(f"Unknown case {self.camera_state}")
+
+        if self.update_still is not None:
+            self.update_still(self.apply_image_crop(image=image))
 
         return (
             crop_image(
@@ -316,44 +328,45 @@ class EnderLeafController(object):
             metadata,
         )
 
-    def switch_mode(
-        self, new_mode: Literal[CameraMode.IDLE, CameraMode.VIDEO, CameraMode.STILL]
+    def switch_state(
+        self, new_mode: Literal[CameraState.IDLE, CameraState.VIDEO, CameraState.STILL]
     ):
-        if new_mode == self._camera_mode:
+        if new_mode == self._camera_state:
             return
         match new_mode:
-            case CameraMode.IDLE:
+            case CameraState.IDLE:
                 self.stop()
-            case CameraMode.VIDEO:
-                self.camera.switch_mode(self._video_conf)
-            case CameraMode.STILL:
+            case CameraState.VIDEO:
+                if self._camera_state == CameraState.STILL:
+                    self.camera.stop()
+                self.start()
+            case CameraState.STILL:
                 self.stop()
                 self.camera.switch_mode(self._still_conf)
-        self._camera_mode = new_mode
+            case _:
+                raise NotImplementedError(f"Unknown case {new_mode}")
+        self._camera_state = new_mode
 
     def start(self):
-        if self._camera_mode != CameraMode.VIDEO:
-            if self.parent is not None:
-                self.stop_event.clear()
+        if self._camera_state != CameraState.VIDEO:
+            self.stop_event.clear()
             self.camera.configure(self._video_conf)
             self.output = StreamingOutput()
             self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
             self.camera.start_recording(JpegEncoder(), FileOutput(self.output))
-            if self.parent is not None:
-                self.thread = Thread(target=self.update_parent_preview)
-                self.thread.start()
+            self.thread = Thread(target=self.call_update_preview)
+            self.thread.start()
             time.sleep(0.5)
-            self._camera_mode = CameraMode.VIDEO
+            self._camera_state = CameraState.VIDEO
 
     def stop(self):
-        if self._camera_mode != CameraMode.IDLE:
-            if self.parent is not None:
-                self.stop_event.set()
-                self.thread.join()
+        if self._camera_state != CameraState.IDLE:
+            self.stop_event.set()
+            self.thread.join()
             self.camera.stop_recording()
             self.output.close()
             self.camera.stop()
-            self._camera_mode = CameraMode.IDLE
+            self._camera_state = CameraState.IDLE
 
     def check_stage(self):
         return self._stage is not None
@@ -373,26 +386,25 @@ class EnderLeafController(object):
         if self.printer_ready() is False:
             return
         self._stage.finish_moves()
-        if self.parent is not None:
-            self.parent.on_z_moved(self.get_position()[2])
+        if self.update_z_pos is not None:
+            self.update_z_pos(self.get_position()[2])
 
-    def update_positions_plot(self, index: int | list | None = None):
-        if self.parent is None:
+    def call_update_position_plot(self, index: int | list | None = None):
+        if self.update_position_plot is None:
             return
-        if len(self._positions) == 0:
-            self.parent.update_position_plot(None)
-        else:
-            self.parent.update_position_plot(
-                plot_path_status(
-                    path=self._positions, circle_diam=17, highlighted_indexes=index
-                )
+        self.update_position_plot(
+            None
+            if len(self._positions) == 0
+            else plot_path_status(
+                path=self._positions, circle_diam=17, highlighted_indexes=index
             )
+        )
 
     def move_position(self, position, index: int | None = None):
         if self.printer_ready() is False:
             return
         self._stage.move_position(position)
-        self.update_positions_plot(index=index)
+        self.call_update_position_plot(index=index)
         self.finish_moves()
 
     def move_absolute(self, x, y, z):
@@ -433,46 +445,6 @@ class EnderLeafController(object):
             return
         self.move_position((bed.x_min, bed.y_max // 2, bed.rest_height))
 
-    def get_focused_z(self, delta_z=1) -> float:
-        if self.printer_ready() is False:
-            return
-        zrange = np.array(range(-self.focus_delta_z, self.focus_delta_z, delta_z))
-        pos = self.get_position()
-        self.focus_start_z
-        mxScore = -1
-        bestZ = 0
-        variances = {}
-
-        for z in zrange:
-            self.move_position([pos[0], pos[1], z + self.focus_start_z])
-            img, _ = self.capture_array()
-            grayImage = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-            score = lap_var(grayImage)
-            variances[z + self.focus_start_z] = score
-            if score > mxScore:
-                mxScore = score
-                bestZ = z
-
-        self.move_position([pos[0], pos[1], self.focus_start_z])
-
-        if self.parent is not None:
-            fig = Figure(figsize=(4, 4))
-            ax = fig.subplots(nrows=1, ncols=1)
-            fig.suptitle("Variance")
-            ax.plot(list(variances.keys()), list(variances.values()))
-            ax.add_patch(
-                Circle(
-                    xy=(pos[2] + bestZ, variances[pos[2] + bestZ]),
-                    radius=1,
-                    edgecolor="lime",
-                    facecolor="lime",
-                    linewidth=1,
-                )
-            )
-            self.parent.update_focus_plot(fig)
-
-        return bestZ + self.focus_start_z
-
     def get_qr_data(self, image: np.ndarray | None = None):
         if image is None:
             image = self.capture_array()[0]
@@ -512,19 +484,66 @@ class EnderLeafController(object):
             x,
             y,
         ]
-        self.update_positions_plot(index=[1])
+        if self.update_positions is not None:
+            self.update_positions(self._positions)
+        self.call_update_position_plot(index=[0])
 
-    def center_on_qr_code(self, step_val=10):
+    def get_focused_z(self, delta_z=1, switch_state: bool = False) -> float:
         if self.printer_ready() is False:
             return
-        self.camera.set_controls(
-            {"LensPosition": self.camera.camera_controls["LensPosition"][1]}
-        )
+        self.set_focus_close()
+        if switch_state is True:
+            self.switch_state(CameraState.STILL)
+        zrange = np.array(range(-self.focus_delta_z, self.focus_delta_z, delta_z))
+        pos = self.get_position()
+        self.focus_start_z
+        mxScore = -1
+        bestZ = 0
+        variances = {}
+
+        for z in zrange:
+            self.move_position([pos[0], pos[1], z + self.focus_start_z])
+            img, _ = self.capture_array()
+            grayImage = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            score = lap_var(grayImage)
+            variances[z + self.focus_start_z] = score
+            if score > mxScore:
+                mxScore = score
+                bestZ = z
+
+        self.move_position([pos[0], pos[1], self.focus_start_z])
+
+        if self.update_focus_plot is not None:
+            fig = Figure(figsize=(4, 4))
+            ax = fig.subplots(nrows=1, ncols=1)
+            fig.suptitle("Variance")
+            ax.plot(list(variances.keys()), list(variances.values()))
+            ax.add_patch(
+                Circle(
+                    xy=(pos[2] + bestZ, variances[pos[2] + bestZ]),
+                    radius=1,
+                    edgecolor="lime",
+                    facecolor="lime",
+                    linewidth=1,
+                )
+            )
+            self.update_focus_plot(fig)
+
+        if switch_state is True:
+            self.switch_state(CameraState.VIDEO)
+
+        return bestZ + self.focus_start_z
+
+    def center_on_qr_code(self, step_val=10, switch_state: bool = False):
+        if self.printer_ready() is False:
+            return
+        if switch_state is True:
+            self.switch_state(CameraState.STILL)
         self.backup_crop_values()
         try:
             self.set_crop(0, 0, 0, 0)
             self.move_absolute(bed.qr_start_x, bed.qr_start_y, bed.individual_height)
-            self.get_focused_z()
+            self.get_focused_z(switch_state=False)
             image, _ = self.capture_array()
             cy, cx = image.shape[0] // 2, image.shape[1] // 2
             qr_cx, qr_cy, *_ = self.get_qr_pos(image)
@@ -543,37 +562,49 @@ class EnderLeafController(object):
             return x, y, z
         finally:
             self.restore_crop_values()
+            if switch_state is True:
+                self.switch_state(CameraState.VIDEO)
 
-    def check_corners(self):
+    def check_corners(self, switch_state: bool = False):
         if self.printer_ready() is False:
             return
-        x, y, z = self.center_on_qr_code()
+        if switch_state is True:
+            self.switch_state(CameraState.STILL)
+        x, y, z = self.center_on_qr_code(switch_state=False)
         self.build_snake(x, y)
         for position in get_extremes(self._positions):
             self.move_position((position.x, position.y, z), index=[position.name])
             self.capture_array()
             time.sleep(1)
         self.move_position((x, y, z), index=[0])
+        if switch_state is True:
+            self.switch_state(CameraState.VIDEO)
 
-    def launch_acquisition(self):
+    def launch_acquisition(
+        self, precise_focusing: bool = True, switch_state: bool = False
+    ):
+        self._last_job_data = []
         if self.printer_ready() is False:
             return
-        x, y, z = self.center_on_qr_code()
-        self.backup_crop_values()
-        try:
-            self.set_crop(0, 0, 0, 0)
-            image, _ = self.capture_array()
-            cx, cy, min_x, min_y, max_x, max_y = self.get_qr_pos(image)
-            self.set_crop(
-                top=min_y,
-                bottom=image.shape[0] - max_y,
-                left=min_x,
-                right=image.shape[1] - max_x,
-            )
-            z = self.get_focused_z()
-            self.build_snake(x, y)
-        finally:
-            self.restore_crop_values()
+        if switch_state is True:
+            self.switch_state(CameraState.STILL)
+        x, y, z = self.center_on_qr_code(switch_state=False)
+        if precise_focusing is True:
+            self.backup_crop_values()
+            try:
+                self.set_crop(0, 0, 0, 0)
+                image, _ = self.capture_array()
+                cx, cy, min_x, min_y, max_x, max_y = self.get_qr_pos(image)
+                self.set_crop(
+                    top=min_y,
+                    bottom=image.shape[0] - max_y,
+                    left=min_x,
+                    right=image.shape[1] - max_x,
+                )
+                z = self.get_focused_z(switch_state=False)
+                self.build_snake(x, y)
+            finally:
+                self.restore_crop_values()
         exp_name = self.get_qr_data(self.capture_array()[0])["info"][0].replace(
             "_", "#"
         )
@@ -584,7 +615,6 @@ class EnderLeafController(object):
             exp, inoc, plate = exp_name.split("#")
 
         files = []
-        self._last_job_data = []
         df = pd.DataFrame()
 
         fld_images = DST_FLD.joinpath("images", exp, inoc)
@@ -602,7 +632,7 @@ class EnderLeafController(object):
                 [
                     (
                         # Since we use a snake pattern row index must be updated  when
-                        # column is a even number
+                        # column is an even number
                         chr(65 + (r if c % 2 == 1 else self.plate_row_count - 1 - r)),
                         c,  # Column does not need update
                     )
@@ -639,7 +669,10 @@ class EnderLeafController(object):
             cv2.imwrite(str(file_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
             df = pd.concat([df, pd.DataFrame(metadata)])
         write_dataframe(df, data_file_name)
-        self.update_positions_plot()
+        self.call_update_position_plot()
+
+        if switch_state is True:
+            self.switch_state(CameraState.VIDEO)
 
         self.go_rest()
 
