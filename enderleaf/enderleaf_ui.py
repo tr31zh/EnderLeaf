@@ -5,8 +5,10 @@ from pathlib import Path
 from functools import wraps
 from datetime import datetime as dt
 
-
-from libcamera import controls
+try:
+    from libcamera import controls
+except:
+    pass
 
 import panel as pn
 
@@ -14,7 +16,7 @@ from enderscope.serial import list_ports, default_printer_port
 from enderscope.scan_patterns import plot_path_status
 from enderscope.bed import bed
 from enderleaf.tools import ensure_folder
-from enderleaf.image import to_pil
+from enderleaf.image import to_pil, safe_pil_resize
 from enderleaf.enderleaf_ctrl import EnderLeafController, CropMode
 
 pn.extension("ace", "jsoneditor", "ipywidgets")
@@ -70,7 +72,7 @@ def on_update_preview(image):
 
 
 def on_update_still(image):
-    still_pane.object = to_pil(image)
+    still_pane.object = safe_pil_resize(to_pil(image), new_width=1024, new_height=768)
 
 
 def on_z_moved(z):

@@ -14,11 +14,19 @@ import pandas as pd
 from matplotlib.figure import Figure
 from matplotlib.patches import Circle
 
-from picamera2 import Picamera2
-from picamera2.encoders import JpegEncoder
-from picamera2.outputs import FileOutput
-from libcamera import controls
+try:
+    from picamera2 import Picamera2
+    from picamera2.encoders import JpegEncoder
+    from picamera2.outputs import FileOutput
+    from libcamera import controls
+except:
+    from enderleaf.dummy_camera import Picamera2, JpegEncoder, FileOutput
 
+    simulate_camera = True
+else:
+    simulate_camera = False
+
+from enderleaf.streaming import StreamingOutput
 from enderscope.scan_patterns import snake, get_extremes, plot_path_status
 from enderscope.bed import bed
 from enderscope.serial import list_ports, default_printer_port, Stage
@@ -40,6 +48,7 @@ class CameraState(Enum):
     IDLE = "idle"
     VIDEO = "video"
     STILL = "still"
+    SIMULATION = "simulation"
 
 
 def expand_file_path(file_path: Path, use_file_ts: bool = False):
@@ -89,17 +98,6 @@ def extract_metadata(metadata):
     return dict(sorted({k: [v] for k, v in data.items()}.items()))
 
 
-class StreamingOutput(io.BufferedIOBase):
-    def __init__(self):
-        self.frame = None
-        self.condition = Condition()
-
-    def write(self, buf):
-        with self.condition:
-            self.frame = buf
-            self.condition.notify_all()
-
-
 class EnderLeafController(object):
     def __init__(self):
         self._last_job_data = []
@@ -111,7 +109,9 @@ class EnderLeafController(object):
             raw=self.camera.sensor_modes[2], main={"preserve_ar": False}
         )
         self._still_conf = self.camera.create_still_configuration()
-        self._camera_state = CameraState.IDLE
+        self._camera_state = (
+            CameraState.SIMULATION if simulate_camera is True else CameraState.IDLE
+        )
 
         self.crop_left = 1200
         self.crop_right = 1200
@@ -194,6 +194,36 @@ class EnderLeafController(object):
                     )
                 )
 
+    def dummy_call_update_preview(self):
+        while True:
+            if self.stop_event.is_set() is True or self.output.closed is True:
+                break
+            if self.update_preview is None:
+                continue
+            data = self.camera.read()
+            if not data:
+                break  # EOF reached
+            # Decode JPEG bytes back to image
+            image = cv2.cvtColor(
+                cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR),
+                cv2.COLOR_BGR2RGB,
+            )
+            main_width, main_height = self.camera.get_image_size("main")
+            raw_width, raw_height = self.camera.get_image_size("raw")
+            self.update_preview(
+                image=self.apply_image_crop(
+                    image=image,
+                    crop_data=Rectangle(
+                        top=round(self.crop_top / raw_height * main_height) & ~1,
+                        bottom=main_height
+                        - (round(self.crop_bottom / raw_height * main_height) & ~1),
+                        left=round(self.crop_left / raw_width * main_width) & ~1,
+                        right=main_width
+                        - (round(self.crop_right / raw_width * main_width) & ~1),
+                    ),
+                )
+            )
+
     def apply_image_crop(self, image, crop_data: Rectangle | None = None):
         crop_data = (
             Rectangle(
@@ -258,7 +288,7 @@ class EnderLeafController(object):
     def shutter(self, state: bool, value: list | tuple = (255, 255, 255), wait=2):
         self._is_lights_on = state
         self.top_lights.shutter(state=state, value=value)
-        controls = (
+        self.camera.set_controls(
             {
                 "AeEnable": False,
                 "ExposureTime": 7000,
@@ -269,7 +299,6 @@ class EnderLeafController(object):
             if state is True
             else {"AeEnable": True, "AwbEnable": True}
         )
-        self.camera.set_controls(controls)
 
     def toggle_lights(self):
         self.shutter(not self._is_lights_on)
@@ -287,7 +316,10 @@ class EnderLeafController(object):
 
     def autofocus_cycle(self):
         self.camera.autofocus_cycle()
-        self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
+        if simulate_camera is True:
+            pass
+        else:
+            self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
 
     def set_focus_close(self):
         self.camera.set_controls(
@@ -309,6 +341,9 @@ class EnderLeafController(object):
                 metadata = self.camera.capture_metadata()
             case CameraState.IDLE:
                 return
+            case CameraState.SIMULATION:
+                image = self.camera.capture_array("raw")
+                metadata = self.camera.capture_metadata()
             case _:
                 raise NotImplementedError(f"Unknown case {self.camera_state}")
 
@@ -343,6 +378,8 @@ class EnderLeafController(object):
             case CameraState.STILL:
                 self.stop()
                 self.camera.switch_mode(self._still_conf)
+            case CameraState.SIMULATION:
+                pass
             case _:
                 raise NotImplementedError(f"Unknown case {new_mode}")
         self._camera_state = new_mode
@@ -352,15 +389,22 @@ class EnderLeafController(object):
             self.stop_event.clear()
             self.camera.configure(self._video_conf)
             self.output = StreamingOutput()
-            self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
+            if simulate_camera is True:
+                pass
+            else:
+                self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
             self.camera.start_recording(JpegEncoder(), FileOutput(self.output))
-            self.thread = Thread(target=self.call_update_preview)
+            if simulate_camera is True:
+                self.thread = Thread(target=self.dummy_call_update_preview)
+            else:
+                self.thread = Thread(target=self.call_update_preview)
             self.thread.start()
             time.sleep(0.5)
-            self._camera_state = CameraState.VIDEO
+            if self._camera_state != CameraState.SIMULATION:
+                self._camera_state = CameraState.VIDEO 
 
     def stop(self):
-        if self._camera_state != CameraState.IDLE:
+        if self._camera_state not in [CameraState.IDLE, CameraState.SIMULATION]:
             self.stop_event.set()
             self.thread.join()
             self.camera.stop_recording()

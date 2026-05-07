@@ -1,10 +1,19 @@
 from enum import Enum
 from typing import Literal, Any
-from collections import namedtuple
 from dataclasses import dataclass
 
-import board
-import neopixel
+try:
+    import board
+    from neopixel import NeoPixel
+
+    sim_needed = False
+except:
+    sim_needed = True
+
+    class board(Enum):
+        D18 = "d18"
+
+    import numpy as np
 
 
 class CardPoint(Enum):
@@ -13,14 +22,18 @@ class CardPoint(Enum):
     SOUTH = "SOUTH"
     WEST = "WEST"
 
+
 @dataclass
 class LedData:
     pin: Any
     led_count: int
 
-    def cardinal(self, cardinal_point:Literal[
+    def cardinal(
+        self,
+        cardinal_point: Literal[
             CardPoint.NORTH, CardPoint.SOUTH, CardPoint.EAST, CardPoint.WEST
-        ]):
+        ],
+    ):
         match cardinal_point:
             case CardPoint.NORTH:
                 return self.north
@@ -51,10 +64,14 @@ class LedData:
 # Grrove LED PIN 18, 16 LEDs
 # Hobby LED PIN XX, 12 LEDs
 
+
 class Enderlights:
     def __init__(self, led_data: LedData = LedData(pin=board.D18, led_count=16)):
         self.led_data = led_data
-        self.pixels = neopixel.NeoPixel(self.led_data.pin, self.led_data.led_count)
+        if sim_needed is True:
+            self.pixels = np.zeros((self.led_data.led_count, 3))
+        else:
+            self.pixels = NeoPixel(self.led_data.pin, self.led_data.led_count)
 
     def __getitem__(self, index):
         return self.pixels[index]
@@ -63,7 +80,11 @@ class Enderlights:
         self.pixels[index] = value
 
     def fill(self, value: list | tuple) -> None:
-        self.pixels.fill(value)
+        if sim_needed is True:
+            for i in range(self.pixels.shape[0]):
+                self.pixels[i] = [3,3,3]
+        else:
+            self.pixels.fill(value)
 
     def set_slice(self, start: int, end: int, value: tuple):
         self[start:end] = (end - start) * [value]
@@ -97,7 +118,7 @@ class Enderlights:
         self[start : end + 1] = (end - start + 1) * [value]
 
 
-def cycle(lights:Enderlights, size, step, value=(255, 255, 255)):
+def cycle(lights: Enderlights, size, step, value=(255, 255, 255)):
     for i in range(0, lights.led_data.led_count, step):
         lights.shutter(False)
         start, stop = i, min(i + size, lights.led_data.led_count)
