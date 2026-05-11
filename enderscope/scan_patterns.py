@@ -118,7 +118,7 @@ def plot_path(
 
 def plot_path_status(
     path: np.ndarray | None = None,
-    title="Path preview",
+    title="PAth status",
     circle_diam: float | None = None,
     highlighted_indexes: int | list | None = None,
 ):
@@ -165,6 +165,57 @@ def plot_path_status(
                     radius=circle_diam / 2,
                     edgecolor="green",
                     facecolor=facecolor,
+                    linewidth=1,
+                )
+            )
+
+    return fig
+
+
+def plot_discs_status(
+    path: np.ndarray | None = None,
+    title="Disc status",
+    circle_diam: float = 17,
+    good_discs: list = [],
+    bad_discs: list = [],
+):
+    fig = Figure(figsize=(4, 4))
+    ax = fig.subplots(nrows=1, ncols=1)
+    ax.add_patch(
+        Rectangle(
+            (0, 0),
+            bed.x_max,
+            bed.y_max,
+            edgecolor="green",
+            facecolor="#00ff0005",
+            linewidth=1,
+        )
+    )
+    ax.axis("equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlim(bed.x_min, bed.x_max)
+    ax.set_ylim(bed.y_min, bed.y_max)
+    ax.set_xlabel("x axis")
+    ax.set_ylabel("y axis")
+    ax.set_title(title)
+    if path is None:
+        return fig
+    x = path[:, 0]
+    y = path[:, 1]
+    ax.plot(x, y, marker=".")
+    for idx, (x_pos, y_pos) in enumerate(zip(x, y)):
+        if circle_diam is not None:
+            ax.add_patch(
+                Circle(
+                    xy=(x_pos, y_pos),
+                    radius=circle_diam / 2,
+                    edgecolor="blue",
+                    facecolor=(
+                        "green"
+                        if idx in good_discs
+                        else "red" if idx in bad_discs else "lavender"
+                    ),
                     linewidth=1,
                 )
             )

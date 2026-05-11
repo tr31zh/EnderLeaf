@@ -69,7 +69,6 @@ def get_qr_data(
         "points": np.asarray(point_data),
     }
 
-
 def get_qr_viz(
     image_object: Path | str | np.ndarray, safe_pad=100, sharpen_image: bool = False
 ):

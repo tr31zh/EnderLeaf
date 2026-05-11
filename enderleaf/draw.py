@@ -1,4 +1,6 @@
 from matplotlib.figure import Figure
+import cv2
+
 
 def plot_image_to_ax(ax, image, title=None, fontsize=18):
     """Plot image to existing ax and set title
@@ -54,3 +56,14 @@ def image_grid(
 
     fig.tight_layout()
     return fig
+
+
+def draw_circles(image, circles, thickness=12):
+    out = image.copy()
+    for _, cx, cy, r in circles["accepted"]:
+        out = cv2.circle(out, (cx, cy), r, (0, 0, 0), thickness=thickness)
+    for _, cx, cy, r in circles["discarded_position"]:
+        out = cv2.circle(out, (cx, cy), r, (255, 0, 0), thickness=thickness // 2)
+    for accu, cx, cy, r in circles["discarded_accu"]:
+        _ = cv2.circle(out, (cx, cy), r, (255, 0, 255), thickness=thickness // 2)
+    return out

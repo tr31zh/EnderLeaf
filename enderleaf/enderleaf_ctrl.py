@@ -27,13 +27,19 @@ else:
     simulate_camera = False
 
 from enderleaf.streaming import StreamingOutput
-from enderscope.scan_patterns import snake, get_extremes, plot_path_status
+from enderscope.scan_patterns import (
+    snake,
+    get_extremes,
+    plot_path_status,
+    plot_discs_status,
+)
 from enderscope.bed import bed
 from enderscope.serial import list_ports, default_printer_port, Stage
-from enderscope.enderlights_pi import Enderlights
+from enderscope.enderlights_pi import Enderlights, default_leds
 from enderleaf.tools import ensure_folder, format_datetime, write_dataframe
-from enderleaf.image import crop_image, Rectangle, lap_var
+from enderleaf.image import crop_image, Rectangle, lap_var, get_circles
 from enderleaf.qr_reader import get_qr_data, get_points_extremes
+from enderleaf.draw import draw_circles
 
 DST_FLD = Path(".").joinpath("output")
 
@@ -129,8 +135,14 @@ class EnderLeafController(object):
 
         self._homed = False
         self._stage = None
-        self.top_lights = Enderlights()
+        self.top_lights = Enderlights(
+            default_leds["groov_led"], enabled=True, default_intensity=255
+        )
         self.top_lights.shutter(False)
+        self.side_lights = Enderlights(
+            default_leds["hobby_led"], enabled=False, default_intensity=255
+        )
+        self.side_lights.shutter(False)
         self._is_lights_on = False
 
         self._positions = []
@@ -255,7 +267,7 @@ class EnderLeafController(object):
                     image = crop_data.to_cv(
                         image=image, color=(255, 0, 255), thickness=4
                     )
-                case CropMode.IGNORE:
+                case CropMode.IGNORE.value:
                     pass
                 case _:
                     raise NotImplementedError(f"Unknown case {self.crop_mode}")
@@ -285,9 +297,10 @@ class EnderLeafController(object):
         self.focus_start_z = focus_start_z
         self.focus_delta_z = focus_delta_z
 
-    def shutter(self, state: bool, value: list | tuple = (255, 255, 255), wait=2):
+    def shutter(self, state: bool, wait=2):
         self._is_lights_on = state
-        self.top_lights.shutter(state=state, value=value)
+        self.top_lights.shutter(state=state)
+        self.side_lights.shutter(state=state)
         self.camera.set_controls(
             {
                 "AeEnable": False,
@@ -299,9 +312,18 @@ class EnderLeafController(object):
             if state is True
             else {"AeEnable": True, "AwbEnable": True}
         )
+        time.sleep(wait)
 
     def toggle_lights(self):
         self.shutter(not self._is_lights_on)
+
+    def set_top_lights_intensity(self, intensity):
+        self.top_lights.default_intensity = intensity
+        self.shutter(state=self._is_lights_on)
+
+    def set_side_lights_intensity(self, intensity):
+        self.side_lights.default_intensity = intensity
+        self.shutter(state=self._is_lights_on)
 
     def set_sensor_mode(self, sensor_mode):
         self.camera.stop_recording()
@@ -401,7 +423,7 @@ class EnderLeafController(object):
             self.thread.start()
             time.sleep(0.5)
             if self._camera_state != CameraState.SIMULATION:
-                self._camera_state = CameraState.VIDEO 
+                self._camera_state = CameraState.VIDEO
 
     def stop(self):
         if self._camera_state not in [CameraState.IDLE, CameraState.SIMULATION]:
@@ -444,11 +466,14 @@ class EnderLeafController(object):
             )
         )
 
-    def move_position(self, position, index: int | None = None):
+    def move_position(
+        self, position, index: int | None = None, update_position_plot: bool = True
+    ):
         if self.printer_ready() is False:
             return
         self._stage.move_position(position)
-        self.call_update_position_plot(index=index)
+        if update_position_plot is True:
+            self.call_update_position_plot(index=index)
         self.finish_moves()
 
     def move_absolute(self, x, y, z):
@@ -493,7 +518,7 @@ class EnderLeafController(object):
         if image is None:
             image = self.capture_array()[0]
         qr_data = get_qr_data(image)
-        if qr_data["retval"] is False:
+        if qr_data["retval"] is False or len(qr_data["info"]) == 0 or len(qr_data["points"]) == 0:
             self.toggle_lights()
             time.sleep(2)
             qr_data = get_qr_data(self.capture_array()[0])
@@ -624,10 +649,7 @@ class EnderLeafController(object):
         if switch_state is True:
             self.switch_state(CameraState.VIDEO)
 
-    def launch_acquisition(
-        self, precise_focusing: bool = True, switch_state: bool = False
-    ):
-        self._last_job_data = []
+    def init_job(self, precise_focusing: bool = True, switch_state: bool = False):
         if self.printer_ready() is False:
             return
         if switch_state is True:
@@ -657,7 +679,42 @@ class EnderLeafController(object):
         except:
             exp_name = "ExpXXDMXX#IX#PXX"
             exp, inoc, plate = exp_name.split("#")
+        return exp_name, exp, inoc, plate, z
 
+    def parse_positions(self):
+        return [
+            (idx, p, c, r)
+            for idx, (p, (c, r)) in enumerate(
+                zip(
+                    self._positions,
+                    [
+                        (
+                            # Since we use a snake pattern row index must be updated  when
+                            # column is an even number
+                            chr(
+                                65 + (r if c % 2 == 1 else self.plate_row_count - 1 - r)
+                            ),
+                            c,  # Column does not need update
+                        )
+                        for c, r in list(
+                            # Use product to genarate the col row combinations
+                            product(
+                                [i + 1 for i in range(self.plate_col_count)],
+                                [i for i in range(self.plate_row_count)],
+                            )
+                        )
+                    ],
+                )
+            )
+        ]
+
+    def launch_acquisition(
+        self, precise_focusing: bool = True, switch_state: bool = False
+    ):
+        self._last_job_data = []
+        exp_name, exp, inoc, plate, z = self.init_job(
+            precise_focusing=precise_focusing, switch_state=switch_state
+        )
         files = []
         df = pd.DataFrame()
 
@@ -670,26 +727,7 @@ class EnderLeafController(object):
             exp + "#I" + str(inoc) + "#P" + str(plate) + "#" + start_ts
         ).with_suffix(".csv")
 
-        for idx, (p, (c, r)) in enumerate(
-            zip(
-                self._positions,
-                [
-                    (
-                        # Since we use a snake pattern row index must be updated  when
-                        # column is an even number
-                        chr(65 + (r if c % 2 == 1 else self.plate_row_count - 1 - r)),
-                        c,  # Column does not need update
-                    )
-                    for c, r in list(
-                        # Use product to genarate the col row combinations
-                        product(
-                            [i + 1 for i in range(self.plate_col_count)],
-                            [i for i in range(self.plate_row_count)],
-                        )
-                    )
-                ],
-            )
-        ):
+        for idx, p, c, r in self.parse_positions():
             self.move_position(np.append(p, z), index=idx)
             file_path = fld_images.joinpath(
                 f"{exp_name}#{r}#{c}#{format_datetime()}"
@@ -698,7 +736,7 @@ class EnderLeafController(object):
             image, metadata = self.capture_array()
             metadata = (
                 expand_file_path(file_path)
-                | {"job_ts": start_ts}
+                | {"job_ts": [start_ts]}
                 | extract_metadata(metadata=metadata)
                 | {
                     "height": [z],
@@ -707,6 +745,10 @@ class EnderLeafController(object):
                     "crop_bottom": [self.crop_bottom],
                     "crop_left": [self.crop_left],
                     "crop_right": [self.crop_right],
+                    "top_light_intensity":[self.top_lights.default_intensity],
+                    "top_light_enabled":[self.top_lights.enable],
+                    "side_light_intensity":[self.side_lights.default_intensity],
+                    "side_light_enabled":[self.side_lights.enable],
                 }
             )
             self._last_job_data.append((image, metadata))
@@ -719,6 +761,49 @@ class EnderLeafController(object):
             self.switch_state(CameraState.VIDEO)
 
         self.go_rest()
+
+    def check_discs_positions(
+        self, precise_focusing: bool = False, switch_state: bool = True
+    ):
+        if self.printer_ready() is False:
+            return
+        *_, z = self.init_job(
+            precise_focusing=precise_focusing, switch_state=switch_state
+        )
+
+        good_discs = []
+        bad_discs = []
+        old_crop_mode = self.crop_mode
+        self.crop_mode = CropMode.CROP.value
+
+        for idx, p, *_ in self.parse_positions()[:10]:
+            self.move_position(np.append(p, z), index=idx, update_position_plot=False)
+            image, _ = self.capture_array()
+            circles = get_circles(
+                image=image,
+                color_space="hsv",
+                channel="s",
+                min_threshold=100,
+                max_threshold=255,
+            )
+            if self.update_still is not None:
+                self.update_still(draw_circles(image, circles))
+            if len(circles["accepted"]) == 1:
+                good_discs.append(idx)
+            else:
+                bad_discs.append(idx)
+            if self.update_position_plot is None:
+                continue
+            self.update_position_plot(
+                plot_discs_status(
+                    path=self._positions, good_discs=good_discs, bad_discs=bad_discs
+                )
+            )
+            time.sleep(1)
+
+        self.crop_mode = old_crop_mode
+        if switch_state is True:
+            self.switch_state(CameraState.VIDEO)
 
     @property
     def last_job_data(self):

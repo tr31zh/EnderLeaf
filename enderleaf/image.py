@@ -11,7 +11,6 @@ from skimage.transform import hough_circle, hough_circle_peaks
 from skimage.feature import SIFT, match_descriptors
 
 
-
 @dataclass
 class Rectangle:
     top: int | None = None
@@ -252,11 +251,62 @@ def filter_circles(circles, img_width, img_height):
         "discarded_accu": discarded_accu,
     }
 
+
+def get_circles(
+    image,
+    color_space,
+    channel,
+    min_threshold=100,
+    max_threshold=200,
+    aperture=3,
+    max_circles=3,
+    resize_factor=4,
+    normalize: bool = True,
+    median_blur=7,
+    radii_data: tuple = (450, 550, 20),
+):
+    im_width = image.shape[1] // resize_factor
+    im_height = image.shape[0] // resize_factor
+    image = cv2.resize(image, (im_width, im_height))
+    if normalize is True:
+        image = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX)
+    if median_blur > 1:
+        image = cv2.medianBlur(image, ksize=median_blur)
+    edges = canny(
+        image=image,
+        color_space=color_space,
+        channel=channel,
+        min_thresholf=min_threshold,
+        max_threshold=max_threshold,
+        aperture=aperture,
+    )
+    circles = filter_circles(
+        find_circles(
+            edges=edges,
+            radii=np.arange(
+                radii_data[0] // resize_factor,
+                radii_data[1] // resize_factor,
+                radii_data[2] // resize_factor,
+            ),
+            max_circles=max_circles,
+        ),
+        img_width=im_width,
+        img_height=im_height,
+    )
+    return {
+        k: [
+            [a, x * resize_factor, y * resize_factor, r * resize_factor]
+            for a, x, y, r in v
+        ]
+        for k, v in circles.items()
+    }
+
+
 def rotate_image(image, angle):
     if angle in [None, 0]:
         return image
     else:
-        (h, w) = image.shape[:2]
+        h, w = image.shape[:2]
         return cv2.warpAffine(
             image, cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0), (w, h)
         )

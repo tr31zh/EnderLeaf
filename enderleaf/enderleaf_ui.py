@@ -296,6 +296,36 @@ bt_launch_acquisition = pn.widgets.Button(
     icon_size="2em",
     sizing_mode="stretch_width",
 )
+bt_check_discs = pn.widgets.Button(
+    name="Check disc positions",
+    icon="zoom-check",
+    icon_size="2em",
+    sizing_mode="stretch_width",
+    button_type="warning",
+)
+chk_lights_top = pn.widgets.Checkbox(
+    name="Enable", value=controller.top_lights.enabled, width=60
+)
+chk_lights_side = pn.widgets.Checkbox(
+    name="Enable", value=controller.side_lights.enabled, width=60
+)
+eis_lights_top_intensity = pn.widgets.EditableIntSlider(
+    name="Intensity",
+    start=0,
+    end=255,
+    step=1,
+    value=controller.top_lights.default_intensity,
+    sizing_mode="stretch_width",
+)
+eis_lights_side_intensity = pn.widgets.EditableIntSlider(
+    name="Intensity",
+    start=0,
+    end=255,
+    step=1,
+    value=controller.side_lights.default_intensity,
+    sizing_mode="stretch_width",
+)
+
 
 # MARK: Cards
 crd_preview = pn.layout.Card(
@@ -313,29 +343,6 @@ crd_preview = pn.layout.Card(
     title="Preview",
     collapsed=True,
 )
-crd_crop_data = pn.layout.Card(
-    objects=[
-        ii_crop_top,
-        pn.Row(ii_crop_left, ii_crop_right),
-        ii_crop_bottom,
-        sel_crop_mode,
-    ],
-    title="Crop",
-    collapsed=True,
-)
-crd_focus = pn.layout.Card(
-    objects=[pn.Row(ii_focus_start_z, ii_focus_delta_z)],
-    title="Focus",
-    collapsed=True,
-)
-crd_plate = pn.layout.Card(
-    objects=[
-        pn.Row(ii_plate_x, ii_plate_y),
-        pn.Row(ii_plate_row_count, ii_plate_col_count),
-    ],
-    title="Plate",
-    collapsed=True,
-)
 crd_init = pn.layout.Card(
     objects=[
         pn.Row(bt_preview_start, bt_preview_stop),
@@ -345,11 +352,42 @@ crd_init = pn.layout.Card(
     title="Initialize",
     collapsed=False,
 )
+crd_configure = pn.layout.Card(
+    objects=[
+        pn.layout.WidgetBox(
+            "### Crop",
+            ii_crop_top,
+            pn.Row(ii_crop_left, ii_crop_right),
+            ii_crop_bottom,
+            sel_crop_mode,
+        ),
+        pn.layout.WidgetBox("### Focus", pn.Row(ii_focus_start_z, ii_focus_delta_z)),
+        pn.layout.WidgetBox(
+            "### Plate",
+            pn.Row(ii_plate_x, ii_plate_y),
+            pn.Row(ii_plate_row_count, ii_plate_col_count),
+        ),
+        pn.layout.WidgetBox(
+            "### Lights",
+            pn.Row(
+                pn.pane.Str("TOP", width=20), chk_lights_top, eis_lights_top_intensity
+            ),
+            pn.Row(
+                pn.pane.Str("SIDE", width=20),
+                chk_lights_side,
+                eis_lights_side_intensity,
+            ),
+        ),
+    ],
+    title="Configure",
+    collapsed=True,
+)
 crd_move = pn.layout.Card(
     objects=[
         pn.Row(bt_home, bt_idle, bt_park),
         pn.Row(bt_qr_code, bt_check_corners),
         pn.Row(bt_move_to, sel_position),
+        bt_check_discs,
         pn.Row(bt_lights_on, bt_lights_off),
         bt_launch_acquisition,
     ],
@@ -419,6 +457,13 @@ def on_check_corners(event):
 
 def on_launch_acquisition(event):
     controller.launch_acquisition(
+        switch_state=True,
+        # precise_focusing=False,
+    )
+
+
+def on_check_disc_positions(event):
+    controller.check_discs_positions(
         # switch_state=True,
         # precise_focusing=False,
     )
@@ -457,12 +502,33 @@ bt_move_to.on_click(on_move_to)
 bt_lights_on.on_click(on_lights_on)
 bt_lights_off.on_click(on_lights_off)
 bt_launch_acquisition.on_click(on_launch_acquisition)
+bt_check_discs.on_click(on_check_disc_positions)
 
 
 # MARK: Dependables
 @pn.depends(sel_sensor_modes.param.value, watch=True)
 def on_sensor_mode_changed(sensor_mode):
     controller.set_sensor_mode(sensor_mode)
+
+
+@pn.depends(chk_lights_top.param.value, watch=True)
+def on_top_lights_switched(top_lights):
+    controller.top_lights.enabled = top_lights
+
+
+@pn.depends(chk_lights_side.param.value, watch=True)
+def on_side_lights_switched(side_lights):
+    controller.side_lights.enabled = side_lights
+
+
+@pn.depends(eis_lights_top_intensity.param.value, watch=True)
+def on_top_intensity_changed(intensity):
+    controller.set_top_lights_intensity(intensity)
+
+
+@pn.depends(eis_lights_side_intensity.param.value, watch=True)
+def on_side_intensity_changed(intensity):
+    controller.set_side_lights_intensity(intensity)
 
 
 # @working
@@ -520,9 +586,7 @@ def on_plate_properties_changed(x, y, rc, cc, fs, fd):
 
 # MARK: UI
 def ui_sidebar():
-    return pn.Column(
-        crd_preview, crd_init, crd_plate, crd_crop_data, crd_focus, crd_move
-    )
+    return pn.Column(crd_preview, crd_init, crd_configure, crd_move)
 
 
 def ui_main():

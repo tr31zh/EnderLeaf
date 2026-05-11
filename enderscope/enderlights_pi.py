@@ -28,6 +28,34 @@ class LedData:
     pin: Any
     led_count: int
 
+
+default_leds = {
+    "groov_led": LedData(pin=board.D18, led_count=16),
+    "hobby_led": LedData(pin=board.D23, led_count=12),
+}
+
+
+class Enderlights:
+    def __init__(
+        self,
+        led_data: LedData = LedData(pin=board.D18, led_count=16),
+        enabled: bool = True,
+        default_intensity: int = 255,
+    ):
+        self.led_data = led_data
+        if sim_needed is True:
+            self.pixels = np.zeros((self.led_data.led_count, 3))
+        else:
+            self.pixels = NeoPixel(self.led_data.pin, self.led_data.led_count)
+        self.default_intensity = default_intensity
+        self.enabled = enabled
+
+    def __getitem__(self, index):
+        return self.pixels[index]
+
+    def __setitem__(self, index, value):
+        self.pixels[index] = value
+
     def cardinal(
         self,
         cardinal_point: Literal[
@@ -45,6 +73,10 @@ class LedData:
                 return self.west
 
     @property
+    def led_count(self):
+        return self.led_data.led_count
+
+    @property
     def north(self):
         return (0, self.led_count // 4 - 1)
 
@@ -60,51 +92,42 @@ class LedData:
     def west(self):
         return (self.led_count // 4 * 3, self.led_count - 1)
 
-
-# Grrove LED PIN 18, 16 LEDs
-# Hobby LED PIN XX, 12 LEDs
-
-
-class Enderlights:
-    def __init__(self, led_data: LedData = LedData(pin=board.D18, led_count=16)):
-        self.led_data = led_data
-        if sim_needed is True:
-            self.pixels = np.zeros((self.led_data.led_count, 3))
-        else:
-            self.pixels = NeoPixel(self.led_data.pin, self.led_data.led_count)
-
-    def __getitem__(self, index):
-        return self.pixels[index]
-
-    def __setitem__(self, index, value):
-        self.pixels[index] = value
-
     def fill(self, value: list | tuple) -> None:
+        if self.enabled is False:
+            return
         if sim_needed is True:
             for i in range(self.pixels.shape[0]):
-                self.pixels[i] = [3,3,3]
+                self.pixels[i] = value
         else:
             self.pixels.fill(value)
 
     def set_slice(self, start: int, end: int, value: tuple):
         self[start:end] = (end - start) * [value]
 
-    def shutter(self, state: bool, value: list | tuple = (255, 255, 255)) -> None:
-        if state is True:
-            self.fill(value)
+    def shutter(self, state: bool, value: list | tuple | None = None) -> None:
+        if state is True and self.enabled is True:
+            self.fill(
+                value
+                if value is not None
+                else (
+                    self.default_intensity,
+                    self.default_intensity,
+                    self.default_intensity,
+                )
+            )
         else:
             self.fill((0, 0, 0))
 
     def red(self, value):
-        for i in range(self.led_data.led_count):
+        for i in range(self.led_count):
             self[i] = (value, self[i][1], self[i][2])
 
     def green(self, value):
-        for i in range(self.led_data.led_count):
+        for i in range(self.led_count):
             self[i] = (self[i][0], value, self[i][2])
 
     def blue(self, value):
-        for i in range(self.led_data.led_count):
+        for i in range(self.led_count):
             self[i] = (self[i][0], self[i][0], value)
 
     def set_cardinal(
@@ -114,8 +137,16 @@ class Enderlights:
         ],
         value: tuple,
     ):
-        start, end = self.led_data.cardinal(cardinal_point=card_point)
+        start, end = self.cardinal(cardinal_point=card_point)
         self[start : end + 1] = (end - start + 1) * [value]
+
+    def set_cardinals(
+        self,
+        card_points: list,
+        value: tuple,
+    ):
+        for card_point in card_points:
+            self.set_cardinal(card_point=card_point, value=value)
 
 
 def cycle(lights: Enderlights, size, step, value=(255, 255, 255)):
