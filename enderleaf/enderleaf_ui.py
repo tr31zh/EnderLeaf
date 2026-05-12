@@ -218,19 +218,12 @@ bt_check_corners = pn.widgets.Button(
     icon_size="2em",
     sizing_mode="stretch_width",
 )
-bt_lights_on = pn.widgets.Button(
-    name="Lights on",
-    icon="bulb",
-    icon_size="2em",
-    sizing_mode="stretch_width",
-    button_type="default",
-)
-bt_lights_off = pn.widgets.Button(
-    name="Lights Off",
+bt_lights_toggle = pn.widgets.Button(
+    name="TOP lights",
     icon="bulb-off",
     icon_size="2em",
     sizing_mode="stretch_width",
-    button_type="success",
+    button_type="default",
 )
 ii_crop_top = pn.widgets.IntInput(
     name="Top",
@@ -303,26 +296,12 @@ bt_check_discs = pn.widgets.Button(
     sizing_mode="stretch_width",
     button_type="warning",
 )
-chk_lights_top = pn.widgets.Checkbox(
-    name="Enable", value=controller.top_lights.enabled, width=60
-)
-chk_lights_side = pn.widgets.Checkbox(
-    name="Enable", value=controller.side_lights.enabled, width=60
-)
 eis_lights_top_intensity = pn.widgets.EditableIntSlider(
     name="Intensity",
     start=0,
     end=255,
     step=1,
     value=controller.top_lights.default_intensity,
-    sizing_mode="stretch_width",
-)
-eis_lights_side_intensity = pn.widgets.EditableIntSlider(
-    name="Intensity",
-    start=0,
-    end=255,
-    step=1,
-    value=controller.side_lights.default_intensity,
     sizing_mode="stretch_width",
 )
 
@@ -369,14 +348,7 @@ crd_configure = pn.layout.Card(
         ),
         pn.layout.WidgetBox(
             "### Lights",
-            pn.Row(
-                pn.pane.Str("TOP", width=20), chk_lights_top, eis_lights_top_intensity
-            ),
-            pn.Row(
-                pn.pane.Str("SIDE", width=20),
-                chk_lights_side,
-                eis_lights_side_intensity,
-            ),
+            pn.Row(pn.pane.Str("TOP", width=20), eis_lights_top_intensity),
         ),
     ],
     title="Configure",
@@ -388,7 +360,7 @@ crd_move = pn.layout.Card(
         pn.Row(bt_qr_code, bt_check_corners),
         pn.Row(bt_move_to, sel_position),
         bt_check_discs,
-        pn.Row(bt_lights_on, bt_lights_off),
+        pn.Row(bt_lights_toggle),
         bt_launch_acquisition,
     ],
     title="Control",
@@ -469,16 +441,15 @@ def on_check_disc_positions(event):
     )
 
 
-def on_lights_on(event):
-    controller.shutter(True)
-    bt_lights_on.button_type = "success"
-    bt_lights_off.button_type = "default"
-
-
-def on_lights_off(event):
-    controller.shutter(False)
-    bt_lights_on.button_type = "default"
-    bt_lights_off.button_type = "success"
+def on_toggle_lights(event):
+    if controller.top_lights.mean == 0:
+        bt_lights_toggle.icon = "bulb"
+        bt_lights_toggle.button_type = "success"
+        controller.shutter(True)
+    else:
+        bt_lights_toggle.icon = "bulb-off"
+        bt_lights_toggle.button_type = "default"
+        controller.shutter(False)
 
 
 def on_move_to(event):
@@ -499,8 +470,7 @@ bt_park.on_click(on_park)
 bt_qr_code.on_click(on_center_on_qr_code)
 bt_check_corners.on_click(on_check_corners)
 bt_move_to.on_click(on_move_to)
-bt_lights_on.on_click(on_lights_on)
-bt_lights_off.on_click(on_lights_off)
+bt_lights_toggle.on_click(on_toggle_lights)
 bt_launch_acquisition.on_click(on_launch_acquisition)
 bt_check_discs.on_click(on_check_disc_positions)
 
@@ -511,24 +481,9 @@ def on_sensor_mode_changed(sensor_mode):
     controller.set_sensor_mode(sensor_mode)
 
 
-@pn.depends(chk_lights_top.param.value, watch=True)
-def on_top_lights_switched(top_lights):
-    controller.top_lights.enabled = top_lights
-
-
-@pn.depends(chk_lights_side.param.value, watch=True)
-def on_side_lights_switched(side_lights):
-    controller.side_lights.enabled = side_lights
-
-
 @pn.depends(eis_lights_top_intensity.param.value, watch=True)
 def on_top_intensity_changed(intensity):
     controller.set_top_lights_intensity(intensity)
-
-
-@pn.depends(eis_lights_side_intensity.param.value, watch=True)
-def on_side_intensity_changed(intensity):
-    controller.set_side_lights_intensity(intensity)
 
 
 # @working

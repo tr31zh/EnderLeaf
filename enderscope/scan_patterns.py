@@ -173,11 +173,12 @@ def plot_path_status(
 
 
 def plot_discs_status(
-    path: np.ndarray | None = None,
+    path: np.ndarray,
+    good_discs,
+    bad_discs,
+    highlighted_indexes: list = [],
     title="Disc status",
     circle_diam: float = 17,
-    good_discs: list = [],
-    bad_discs: list = [],
 ):
     fig = Figure(figsize=(4, 4))
     ax = fig.subplots(nrows=1, ncols=1)
@@ -205,20 +206,23 @@ def plot_discs_status(
     y = path[:, 1]
     ax.plot(x, y, marker=".")
     for idx, (x_pos, y_pos) in enumerate(zip(x, y)):
-        if circle_diam is not None:
-            ax.add_patch(
-                Circle(
-                    xy=(x_pos, y_pos),
-                    radius=circle_diam / 2,
-                    edgecolor="blue",
-                    facecolor=(
+        ax.add_patch(
+            Circle(
+                xy=(x_pos, y_pos),
+                radius=circle_diam / 2,
+                edgecolor="blue",
+                facecolor=(
+                    "blue"
+                    if idx in highlighted_indexes
+                    else (
                         "green"
                         if idx in good_discs
                         else "red" if idx in bad_discs else "lavender"
-                    ),
-                    linewidth=1,
-                )
+                    )
+                ),
+                linewidth=1,
             )
+        )
 
     return fig
 

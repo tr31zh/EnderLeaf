@@ -2,6 +2,8 @@ from enum import Enum
 from typing import Literal, Any
 from dataclasses import dataclass
 
+import numpy as np
+
 try:
     import board
     from neopixel import NeoPixel
@@ -39,7 +41,6 @@ class Enderlights:
     def __init__(
         self,
         led_data: LedData = LedData(pin=board.D18, led_count=16),
-        enabled: bool = True,
         default_intensity: int = 255,
     ):
         self.led_data = led_data
@@ -48,13 +49,22 @@ class Enderlights:
         else:
             self.pixels = NeoPixel(self.led_data.pin, self.led_data.led_count)
         self.default_intensity = default_intensity
-        self.enabled = enabled
 
     def __getitem__(self, index):
         return self.pixels[index]
 
     def __setitem__(self, index, value):
         self.pixels[index] = value
+
+    def to_json(self) -> dict:
+        return {k: getattr(self, k) for k in ["enabled", "default_intensity"]}
+
+    def from_json(self, data: dict) -> None:
+        for k, v in data.items():
+            try:
+                setattr(self, k, v)
+            except:
+                pass
 
     def cardinal(
         self,
@@ -64,13 +74,42 @@ class Enderlights:
     ):
         match cardinal_point:
             case CardPoint.NORTH:
-                return self.north
+                return (0, self.led_count // 4 - 1)
             case CardPoint.EAST:
-                return self.east
+                return (self.led_count // 4, self.led_count // 2 - 1)
             case CardPoint.SOUTH:
-                return self.south
+                return (self.led_count // 2, self.led_count // 4 * 3 - 1)
             case CardPoint.WEST:
-                return self.west
+                return (self.led_count // 4 * 3, self.led_count - 1)
+
+    def set_cardinal(
+        self,
+        card_point: Literal[
+            CardPoint.NORTH, CardPoint.SOUTH, CardPoint.EAST, CardPoint.WEST
+        ],
+        value: tuple,
+    ):
+        start, end = self.cardinal(cardinal_point=card_point)
+        self[start : end + 1] = (end - start + 1) * [value]
+
+    def set_cardinals(
+        self,
+        card_points: list,
+        value: tuple | None = None,
+    ):
+        for card_point in card_points:
+            self.set_cardinal(
+                card_point=card_point,
+                value=(
+                    value
+                    if value is not None
+                    else (
+                        self.default_intensity,
+                        self.default_intensity,
+                        self.default_intensity,
+                    )
+                ),
+            )
 
     @property
     def led_count(self):
@@ -78,23 +117,45 @@ class Enderlights:
 
     @property
     def north(self):
-        return (0, self.led_count // 4 - 1)
+        start, end = self.cardinal(CardPoint.NORTH)
+        return self[start : end + 1]
+
+    @north.setter
+    def north(self, value):
+        self.set_cardinal(CardPoint.NORTH, value)
 
     @property
     def east(self):
-        return (self.led_count // 4, self.led_count // 2 - 1)
+        start, end = self.cardinal(CardPoint.EAST)
+        return self[start : end + 1]
+
+    @east.setter
+    def east(self, value):
+        self.set_cardinal(CardPoint.EAST, value)
 
     @property
     def south(self):
-        return (self.led_count // 2, self.led_count // 4 * 3 - 1)
+        start, end = self.cardinal(CardPoint.SOUTH)
+        return self[start : end + 1]
+
+    @south.setter
+    def south(self, value):
+        self.set_cardinal(CardPoint.SOUTH, value)
 
     @property
     def west(self):
-        return (self.led_count // 4 * 3, self.led_count - 1)
+        start, end = self.cardinal(CardPoint.WEST)
+        return self[start : end + 1]
+
+    @west.setter
+    def west(self, value):
+        self.set_cardinal(CardPoint.WEST, value)
+
+    @property
+    def mean(self):
+        return np.array(self.pixels).mean(axis=0).mean()
 
     def fill(self, value: list | tuple) -> None:
-        if self.enabled is False:
-            return
         if sim_needed is True:
             for i in range(self.pixels.shape[0]):
                 self.pixels[i] = value
@@ -105,7 +166,7 @@ class Enderlights:
         self[start:end] = (end - start) * [value]
 
     def shutter(self, state: bool, value: list | tuple | None = None) -> None:
-        if state is True and self.enabled is True:
+        if state is True:
             self.fill(
                 value
                 if value is not None
@@ -129,24 +190,6 @@ class Enderlights:
     def blue(self, value):
         for i in range(self.led_count):
             self[i] = (self[i][0], self[i][0], value)
-
-    def set_cardinal(
-        self,
-        card_point: Literal[
-            CardPoint.NORTH, CardPoint.SOUTH, CardPoint.EAST, CardPoint.WEST
-        ],
-        value: tuple,
-    ):
-        start, end = self.cardinal(cardinal_point=card_point)
-        self[start : end + 1] = (end - start + 1) * [value]
-
-    def set_cardinals(
-        self,
-        card_points: list,
-        value: tuple,
-    ):
-        for card_point in card_points:
-            self.set_cardinal(card_point=card_point, value=value)
 
 
 def cycle(lights: Enderlights, size, step, value=(255, 255, 255)):

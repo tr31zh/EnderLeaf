@@ -106,7 +106,6 @@ def extract_metadata(metadata):
 
 class EnderLeafController(object):
     def __init__(self):
-        self._last_job_data = []
         # Camera
         self.stop_event = Event()
         self.output = None
@@ -124,7 +123,6 @@ class EnderLeafController(object):
         self.crop_top = 400
         self.crop_bottom = 350
         self.crop_mode = CropMode.LINES.value
-        self._old_crop_values = -1, -1, -1, -1
 
         self.plate_x = 200
         self.plate_y = 200
@@ -133,19 +131,18 @@ class EnderLeafController(object):
         self.focus_start_z = 36
         self.focus_delta_z = 10
 
-        self._homed = False
-        self._stage = None
-        self.top_lights = Enderlights(
-            default_leds["groov_led"], enabled=True, default_intensity=255
-        )
+        self.top_lights = Enderlights(default_leds["groov_led"], default_intensity=255)
         self.top_lights.shutter(False)
-        self.side_lights = Enderlights(
-            default_leds["hobby_led"], enabled=False, default_intensity=255
-        )
-        self.side_lights.shutter(False)
-        self._is_lights_on = False
+        # self.side_lights = Enderlights(default_leds["hobby_led"], default_intensity=255)
+        # self.side_lights.shutter(False)
 
         self._positions = []
+        self._last_job_data = []
+        self._old_crop_values = -1, -1, -1, -1
+        self._homed = False
+        self._stage = None
+        self._good_discs = []
+        self._bad_discs = []
 
         # Callbacks
         self.update_preview = None
@@ -154,6 +151,54 @@ class EnderLeafController(object):
         self.update_position_plot = None
         self.update_focus_plot = None
         self.update_positions = None
+
+    def reset(self):
+        self.crop_left = 1200
+        self.crop_right = 1200
+        self.crop_top = 400
+        self.crop_bottom = 350
+        self.crop_mode = CropMode.LINES.value
+        self.plate_x = 200
+        self.plate_y = 200
+        self.plate_row_count = 9
+        self.plate_col_count = 9
+        self.focus_start_z = 36
+        self.focus_delta_z = 10
+        self.top_lights.default_intensity = 255
+        # self.side_lights.default_intensity = 125
+
+    def to_json(self) -> dict:
+        return {
+            k: getattr(self, k)
+            for k in [
+                "crop_left",
+                "crop_right",
+                "crop_top",
+                "crop_bottom",
+                "crop_mode",
+                "plate_x",
+                "plate_y",
+                "plate_row_count",
+                "plate_col_count",
+                "focus_start_z",
+                "focus_delta_z",
+            ]
+        } | {
+            "lights_conf": {
+                "top": self.top_lights.to_json(),
+                # "side": self.side_lights.to_json(),
+            }
+        }
+
+    def from_json(self, data: dict) -> None:
+        for k, v in data.items():
+            if k != "lights_conf":
+                try:
+                    setattr(self, k, v)
+                except:
+                    pass
+        self.top_lights.from_json(data["lights_conf"]["top"])
+        # self.side_lights.from_json(data["lights_conf"]["side"])
 
     def backup_crop_values(self):
         self._old_crop_values = (
@@ -297,33 +342,36 @@ class EnderLeafController(object):
         self.focus_start_z = focus_start_z
         self.focus_delta_z = focus_delta_z
 
+    def set_exposure(self):
+        pass
+
+    def set_top_lights(self, state: bool, card_points: list | None = None):
+        if state is False:
+            self.top_lights.shutter(False)
+        elif card_points is None:
+            self.top_lights.shutter(state)
+        else:
+            self.top_lights.shutter(False)
+            self.top_lights.set_cardinals(card_points=card_points)
+
     def shutter(self, state: bool, wait=2):
-        self._is_lights_on = state
         self.top_lights.shutter(state=state)
-        self.side_lights.shutter(state=state)
+        # self.side_lights.shutter(state=state)
         self.camera.set_controls(
             {
                 "AeEnable": False,
-                "ExposureTime": 7000,
+                "ExposureTime": 3000,
                 "AnalogueGain": 1,
                 "AwbEnable": False,
-                "ColourGains": (2.4, 1.0),
+                "ColourGains": (2.3, 0.9),
             }
             if state is True
             else {"AeEnable": True, "AwbEnable": True}
         )
         time.sleep(wait)
 
-    def toggle_lights(self):
-        self.shutter(not self._is_lights_on)
-
     def set_top_lights_intensity(self, intensity):
         self.top_lights.default_intensity = intensity
-        self.shutter(state=self._is_lights_on)
-
-    def set_side_lights_intensity(self, intensity):
-        self.side_lights.default_intensity = intensity
-        self.shutter(state=self._is_lights_on)
 
     def set_sensor_mode(self, sensor_mode):
         self.camera.stop_recording()
@@ -457,14 +505,24 @@ class EnderLeafController(object):
 
     def call_update_position_plot(self, index: int | list | None = None):
         if self.update_position_plot is None:
-            return
-        self.update_position_plot(
-            None
-            if len(self._positions) == 0
-            else plot_path_status(
-                path=self._positions, circle_diam=17, highlighted_indexes=index
+            pass
+        elif len(self._positions) == 0:
+            self.update_position_plot(None)
+        elif len(self._good_discs) > 0 or len(self._bad_discs) > 0:
+            self.update_position_plot(
+                plot_discs_status(
+                    path=self._positions,
+                    good_discs=self._good_discs,
+                    bad_discs=self._bad_discs,
+                    highlighted_indexes=index,
+                )
             )
-        )
+        else:
+            self.update_position_plot(
+                plot_path_status(
+                    path=self._positions, circle_diam=17, highlighted_indexes=index
+                )
+            )
 
     def move_position(
         self, position, index: int | None = None, update_position_plot: bool = True
@@ -487,6 +545,14 @@ class EnderLeafController(object):
             return
         self._stage.move_relative(x, y, z)
         self.finish_moves()
+
+    def move_to(self, position: int):
+        if len(self._positions) == 0:
+            return
+        position -= 1
+        x, y = self._positions[position]
+        self.move_position((x, y), index=[position])
+        self.capture_array()
 
     def go_home(self):
         if self.check_stage() is False:
@@ -518,7 +584,11 @@ class EnderLeafController(object):
         if image is None:
             image = self.capture_array()[0]
         qr_data = get_qr_data(image)
-        if qr_data["retval"] is False or len(qr_data["info"]) == 0 or len(qr_data["points"]) == 0:
+        if (
+            qr_data["retval"] is False
+            or len(qr_data["info"]) == 0
+            or len(qr_data["points"]) == 0
+        ):
             self.toggle_lights()
             time.sleep(2)
             qr_data = get_qr_data(self.capture_array()[0])
@@ -532,14 +602,6 @@ class EnderLeafController(object):
             raise ValueError("Unable to detect QR code")
         min_x, min_y, max_x, max_y = get_points_extremes(points=qr_data["points"][0])
         return (min_x + max_x) // 2, (min_y + max_y) // 2, min_x, min_y, max_x, max_y
-
-    def move_to(self, position: int):
-        if len(self._positions) == 0:
-            return
-        position -= 1
-        x, y = self._positions[position]
-        self.move_position((x, y), index=[position])
-        self.capture_array()
 
     def build_snake(self, x, y) -> np.ndarray:
         self._positions = snake(
@@ -609,6 +671,8 @@ class EnderLeafController(object):
         if switch_state is True:
             self.switch_state(CameraState.STILL)
         self.backup_crop_values()
+        self._good_discs = []
+        self._bad_discs = []
         try:
             self.set_crop(0, 0, 0, 0)
             self.move_absolute(bed.qr_start_x, bed.qr_start_y, bed.individual_height)
@@ -740,15 +804,11 @@ class EnderLeafController(object):
                 | extract_metadata(metadata=metadata)
                 | {
                     "height": [z],
-                    "lights": [self._is_lights_on],
                     "crop_top": [self.crop_top],
                     "crop_bottom": [self.crop_bottom],
                     "crop_left": [self.crop_left],
                     "crop_right": [self.crop_right],
-                    "top_light_intensity":[self.top_lights.default_intensity],
-                    "top_light_enabled":[self.top_lights.enable],
-                    "side_light_intensity":[self.side_lights.default_intensity],
-                    "side_light_enabled":[self.side_lights.enable],
+                    "top_light_intensity": [self.top_lights.default_intensity],
                 }
             )
             self._last_job_data.append((image, metadata))
@@ -771,8 +831,6 @@ class EnderLeafController(object):
             precise_focusing=precise_focusing, switch_state=switch_state
         )
 
-        good_discs = []
-        bad_discs = []
         old_crop_mode = self.crop_mode
         self.crop_mode = CropMode.CROP.value
 
@@ -789,14 +847,16 @@ class EnderLeafController(object):
             if self.update_still is not None:
                 self.update_still(draw_circles(image, circles))
             if len(circles["accepted"]) == 1:
-                good_discs.append(idx)
+                self._good_discs.append(idx)
             else:
-                bad_discs.append(idx)
+                self._bad_discs.append(idx)
             if self.update_position_plot is None:
                 continue
             self.update_position_plot(
                 plot_discs_status(
-                    path=self._positions, good_discs=good_discs, bad_discs=bad_discs
+                    path=self._positions,
+                    good_discs=self._good_discs,
+                    bad_discs=self._bad_discs,
                 )
             )
             time.sleep(1)
