@@ -25,6 +25,25 @@ class CardPoint(Enum):
     WEST = "WEST"
 
 
+LIGHTS_CYCLE = [
+    [],
+    [CardPoint.EAST, CardPoint.NORTH, CardPoint.WEST, CardPoint.SOUTH],
+    [CardPoint.NORTH],
+    [CardPoint.WEST],
+    [CardPoint.SOUTH],
+    [CardPoint.EAST],
+    [CardPoint.NORTH, CardPoint.WEST],
+    [CardPoint.WEST, CardPoint.SOUTH],
+    [CardPoint.SOUTH, CardPoint.EAST],
+    [CardPoint.EAST, CardPoint.NORTH],
+    [CardPoint.NORTH, CardPoint.WEST, CardPoint.SOUTH],
+    [CardPoint.EAST, CardPoint.WEST, CardPoint.SOUTH],
+    [CardPoint.EAST, CardPoint.NORTH, CardPoint.SOUTH],
+    [CardPoint.EAST, CardPoint.NORTH, CardPoint.WEST],
+]
+LEN_LIGHTS_CYCLE = len(LIGHTS_CYCLE)
+
+
 @dataclass
 class LedData:
     pin: Any
@@ -97,6 +116,7 @@ class Enderlights:
         card_points: list,
         value: tuple | None = None,
     ):
+        self.fill((0, 0, 0))
         for card_point in card_points:
             self.set_cardinal(
                 card_point=card_point,

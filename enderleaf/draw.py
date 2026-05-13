@@ -1,6 +1,9 @@
+import numpy as np
+
 from matplotlib.figure import Figure
 import cv2
 
+import albumentations as A
 
 def plot_image_to_ax(ax, image, title=None, fontsize=18):
     """Plot image to existing ax and set title
@@ -67,3 +70,101 @@ def draw_circles(image, circles, thickness=12):
     for accu, cx, cy, r in circles["discarded_accu"]:
         _ = cv2.circle(out, (cx, cy), r, (255, 0, 255), thickness=thickness // 2)
     return out
+
+
+def resize_with_padding(
+    image: np.ndarray,
+    max_size: int,
+    out_width: int | None = None,
+    out_height: int | None = None,
+    interpolation: int = cv2.INTER_CUBIC,
+) -> np.ndarray:
+    return A.Compose(
+        [
+            A.LongestMaxSize(max_size=max_size, p=1, interpolation=interpolation),
+            A.PadIfNeeded(
+                min_height=max_size if out_height is None else out_height,
+                min_width=max_size if out_width is None else out_width,
+                p=1,
+                border_mode=cv2.BORDER_CONSTANT,
+            ),
+        ]
+    )(image=image)["image"]
+
+
+def hconcat_resize_min(
+    im_list: list, interpolation: int = cv2.INTER_CUBIC, height: int | None = None
+) -> np.ndarray:
+    """Horizontally concatenate a list of images
+
+    Args:
+        im_list (list): List of images in OpenCV format
+        interpolation (int, optional): Interpolation method. Defaults to cv2.INTER_CUBIC.
+        height (int | None, optional): Output image height. Defaults to None.
+
+    Returns:
+        np.ndarray: Concatenated image
+    """
+    h_min = min(im.shape[0] for im in im_list) if height is None else height
+    im_list_resize = [
+        resize_with_padding(
+            image=im if len(im.shape) == 3 else cv2.merge([im, im, im]),
+            max_size=h_min,
+            out_width=int(im.shape[1] * h_min / im.shape[0]),
+            out_height=h_min,
+            interpolation=interpolation,
+        )
+        for im in im_list
+    ]
+    return cv2.hconcat(im_list_resize)
+
+
+def vconcat_resize_min(
+    im_list: list, interpolation: int = cv2.INTER_CUBIC, width: int | None = None
+) -> np.ndarray:
+    """Vertically concatenate a list of images
+
+    Args:
+        im_list (list): List of images in OpenCV format
+        interpolation (int, optional): Interpolation method. Defaults to cv2.INTER_CUBIC.
+        width (int | None, optional): Output image width. Defaults to None.
+
+    Returns:
+        np.ndarray: Concatenated image
+    """
+    w_min = min(im.shape[1] for im in im_list) if width is None else width
+    im_list_resize = [
+        resize_with_padding(
+            image=im if len(im.shape) == 3 else cv2.merge([im, im, im]),
+            max_size=w_min,
+            out_width=w_min,
+            out_height=int(im.shape[0] * w_min / im.shape[1]),
+            interpolation=interpolation,
+        )
+        for im in im_list
+    ]
+    return cv2.vconcat(im_list_resize)
+
+
+def concat_tile_resize(
+    im_list_2d: list,
+    interpolation=cv2.INTER_CUBIC,
+    width: int | None = None,
+    height: int | None = None,
+) -> np.ndarray:
+    """Builds mosaic image from list of images
+
+    Args:
+        im_list_2d (list): List of images
+        interpolation (int, optional): Interpolation mode. Defaults to cv2.INTER_CUBIC.
+        width (int | None, optional): Mosaic width. Defaults to None.
+        height (int | None, optional): Mosaic height. Defaults to None.
+
+    Returns:
+        np.ndarray: Mosaic
+    """
+    im_list_v = [
+        hconcat_resize_min(im_list_h, interpolation=interpolation, height=height)
+        for im_list_h in im_list_2d
+    ]
+    return vconcat_resize_min(im_list_v, interpolation=interpolation, width=width)

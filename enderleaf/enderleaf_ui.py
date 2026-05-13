@@ -225,6 +225,13 @@ bt_lights_toggle = pn.widgets.Button(
     sizing_mode="stretch_width",
     button_type="default",
 )
+bt_lights_cycle = pn.widgets.Button(
+    name="Cycle lights",
+    icon="recycle",
+    icon_size="2em",
+    sizing_mode="stretch_width",
+    button_type="default",
+)
 ii_crop_top = pn.widgets.IntInput(
     name="Top",
     align="center",
@@ -360,7 +367,7 @@ crd_move = pn.layout.Card(
         pn.Row(bt_qr_code, bt_check_corners),
         pn.Row(bt_move_to, sel_position),
         bt_check_discs,
-        pn.Row(bt_lights_toggle),
+        pn.Row(bt_lights_toggle, bt_lights_cycle),
         bt_launch_acquisition,
     ],
     title="Control",
@@ -420,7 +427,7 @@ def on_park(event):
 
 
 def on_center_on_qr_code(event):
-    controller.center_on_qr_code()
+    controller.center_on_qr_code(precise_focusing=True)
 
 
 def on_check_corners(event):
@@ -451,6 +458,9 @@ def on_toggle_lights(event):
         bt_lights_toggle.button_type = "default"
         controller.shutter(False)
 
+def on_cycle_lights(event):
+    controller.cycle_lights()
+
 
 def on_move_to(event):
     controller.move_to(sel_position.value)
@@ -471,6 +481,7 @@ bt_qr_code.on_click(on_center_on_qr_code)
 bt_check_corners.on_click(on_check_corners)
 bt_move_to.on_click(on_move_to)
 bt_lights_toggle.on_click(on_toggle_lights)
+bt_lights_cycle.on_click(on_cycle_lights)
 bt_launch_acquisition.on_click(on_launch_acquisition)
 bt_check_discs.on_click(on_check_disc_positions)
 

@@ -134,7 +134,7 @@ def plot_path_status(
             linewidth=1,
         )
     )
-    ax.axis("equal")
+    # ax.axis("equal")
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_xlim(bed.x_min, bed.x_max)

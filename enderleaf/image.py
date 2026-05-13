@@ -1,5 +1,7 @@
 from pathlib import Path
 from dataclasses import dataclass
+from enum import Enum
+from typing import Literal
 
 import numpy as np
 import cv2
@@ -9,6 +11,13 @@ from scipy.spatial.transform import Rotation as R
 from skimage import color
 from skimage.transform import hough_circle, hough_circle_peaks
 from skimage.feature import SIFT, match_descriptors
+
+
+class ImageMergeMode(Enum):
+    MIN = "min"
+    MAX = "max"
+    AVG = "avg"
+    MEDIAN = "median"
 
 
 @dataclass
@@ -201,6 +210,38 @@ def safe_pil_resize(image: Image, new_width, new_height):
     return ImageOps.contain(image=image, size=(new_width, new_height))
 
 
+def merge_images(
+    image_list: list,
+    merge_mode: Literal[
+        ImageMergeMode.MIN,
+        ImageMergeMode.MAX,
+        ImageMergeMode.MEDIAN,
+        ImageMergeMode.AVG,
+    ],
+):
+    match merge_mode:
+        case ImageMergeMode.MIN:
+            result = np.minimum(image_list[0], image_list[1])
+            if len(image_list) == 2:
+                return result
+            for img in image_list[2:]:
+                result = np.minimum(img, result)
+        case ImageMergeMode.MAX:
+            result = np.maximum(image_list[0], image_list[1])
+            if len(image_list) == 2:
+                return result
+            for img in image_list[2:]:
+                result = np.maximum(img, result)
+        case ImageMergeMode.AVG:
+            result = np.mean(image_list, axis=0).astype(np.uint8)
+        case ImageMergeMode.MEDIAN:
+            result = np.median(image_list, axis=0).astype(np.uint8)
+        case _:
+            raise NotImplementedError(f"Unknown mode '{merge_mode}")
+    
+    return result
+
+
 def lap_var(img):
     laplacian = cv2.Laplacian(img, cv2.CV_32F)
     variance = laplacian.var()
@@ -300,6 +341,26 @@ def get_circles(
         ]
         for k, v in circles.items()
     }
+
+def crop_best_circle(image,
+    color_space,
+    channel,
+    min_threshold=100,
+    max_threshold=200,
+    aperture=3,
+    max_circles=3,
+    resize_factor=4,
+    normalize: bool = True,
+    median_blur=7,
+    radii_data: tuple = (450, 550, 20),
+):
+    circles = get_circles(**locals())
+    if len(circles["accepted"]) == 1:
+        accu, cx, cy, r = circles["accepted"][0]
+        
+        return crop_image(out_crop, Rectangle.from_circle((cx, cy, r + 16)))
+    else:
+        return image
 
 
 def rotate_image(image, angle):

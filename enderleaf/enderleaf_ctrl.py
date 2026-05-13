@@ -1,10 +1,9 @@
 from itertools import product
 from pathlib import Path
 from datetime import datetime as dt
-from threading import Thread, Condition, Event
+from threading import Thread, Event
 from enum import Enum
 import time
-import io
 from typing import Literal
 
 import numpy as np
@@ -35,8 +34,14 @@ from enderscope.scan_patterns import (
 )
 from enderscope.bed import bed
 from enderscope.serial import list_ports, default_printer_port, Stage
-from enderscope.enderlights_pi import Enderlights, default_leds
-from enderleaf.tools import ensure_folder, format_datetime, write_dataframe
+from enderscope.enderlights_pi import (
+    Enderlights,
+    default_leds,
+    CardPoint,
+    LIGHTS_CYCLE,
+    LEN_LIGHTS_CYCLE,
+)
+from enderleaf.tools import ensure_folder, format_datetime, write_dataframe, time_method
 from enderleaf.image import crop_image, Rectangle, lap_var, get_circles
 from enderleaf.qr_reader import get_qr_data, get_points_extremes
 from enderleaf.draw import draw_circles
@@ -132,17 +137,19 @@ class EnderLeafController(object):
         self.focus_delta_z = 10
 
         self.top_lights = Enderlights(default_leds["groov_led"], default_intensity=255)
+        self.acq_light_configurations = [LIGHTS_CYCLE[1]]
+
         self.top_lights.shutter(False)
-        # self.side_lights = Enderlights(default_leds["hobby_led"], default_intensity=255)
-        # self.side_lights.shutter(False)
 
         self._positions = []
-        self._last_job_data = []
         self._old_crop_values = -1, -1, -1, -1
         self._homed = False
         self._stage = None
         self._good_discs = []
         self._bad_discs = []
+        self._ligths_cycle_index = 0
+        self._step_x = 0
+        self._step_y = 0
 
         # Callbacks
         self.update_preview = None
@@ -165,7 +172,6 @@ class EnderLeafController(object):
         self.focus_start_z = 36
         self.focus_delta_z = 10
         self.top_lights.default_intensity = 255
-        # self.side_lights.default_intensity = 125
 
     def to_json(self) -> dict:
         return {
@@ -343,7 +349,42 @@ class EnderLeafController(object):
         self.focus_delta_z = focus_delta_z
 
     def set_exposure(self):
-        pass
+        avg_lights = self.top_lights.mean
+        if avg_lights == 255:
+            cam_controls = {
+                "AeEnable": False,
+                "ExposureTime": 3000,
+                "AnalogueGain": 1,
+                "AwbEnable": False,
+                "ColourGains": (2.3, 0.9),
+            }
+        elif avg_lights == 63.75:
+            cam_controls = {
+                "AeEnable": False,
+                "ExposureTime": 12000,
+                "AnalogueGain": 1,
+                "AwbEnable": False,
+                "ColourGains": (2.3, 0.9),
+            }
+        elif avg_lights == 127.5:
+            cam_controls = {
+                "AeEnable": False,
+                "ExposureTime": 7000,
+                "AnalogueGain": 1,
+                "AwbEnable": False,
+                "ColourGains": (2.3, 0.9),
+            }
+        elif avg_lights == 191.25:
+            cam_controls = {
+                "AeEnable": False,
+                "ExposureTime": 5000,
+                "AnalogueGain": 1,
+                "AwbEnable": False,
+                "ColourGains": (2.3, 0.9),
+            }
+        else:
+            cam_controls = {"AeEnable": True, "AwbEnable": True}
+        self.camera.set_controls(cam_controls)
 
     def set_top_lights(self, state: bool, card_points: list | None = None):
         if state is False:
@@ -354,9 +395,13 @@ class EnderLeafController(object):
             self.top_lights.shutter(False)
             self.top_lights.set_cardinals(card_points=card_points)
 
-    def shutter(self, state: bool, wait=2):
+    def set_lights(self, lights: list, wait=1):
+        self.top_lights.set_cardinals(lights)
+        self.set_exposure()
+        time.sleep(wait)
+
+    def shutter(self, state: bool, wait=1):
         self.top_lights.shutter(state=state)
-        # self.side_lights.shutter(state=state)
         self.camera.set_controls(
             {
                 "AeEnable": False,
@@ -369,6 +414,16 @@ class EnderLeafController(object):
             else {"AeEnable": True, "AwbEnable": True}
         )
         time.sleep(wait)
+
+    def toggle_lights(self):
+        self.shutter(int(self.top_lights.mean) == 0)
+
+    def cycle_lights(self, wait=1):
+        if self._ligths_cycle_index >= LEN_LIGHTS_CYCLE - 1:
+            self._ligths_cycle_index = 0
+        else:
+            self._ligths_cycle_index += 1
+        self.set_lights(LIGHTS_CYCLE[self._ligths_cycle_index], wait=wait)
 
     def set_top_lights_intensity(self, intensity):
         self.top_lights.default_intensity = intensity
@@ -665,7 +720,9 @@ class EnderLeafController(object):
 
         return bestZ + self.focus_start_z
 
-    def center_on_qr_code(self, step_val=10, switch_state: bool = False):
+    def center_on_qr_code(
+        self, step_val=10, switch_state: bool = False, precise_focusing: bool = True
+    ):
         if self.printer_ready() is False:
             return
         if switch_state is True:
@@ -673,6 +730,8 @@ class EnderLeafController(object):
         self.backup_crop_values()
         self._good_discs = []
         self._bad_discs = []
+        self._step_x = 0
+        self._step_y = 0
         try:
             self.set_crop(0, 0, 0, 0)
             self.move_absolute(bed.qr_start_x, bed.qr_start_y, bed.individual_height)
@@ -680,17 +739,28 @@ class EnderLeafController(object):
             image, _ = self.capture_array()
             cy, cx = image.shape[0] // 2, image.shape[1] // 2
             qr_cx, qr_cy, *_ = self.get_qr_pos(image)
-            step_x, step_y = -step_val if cx > qr_cx else step_val, (
+            self._step_x, self._step_y = -step_val if cx > qr_cx else step_val, (
                 step_val if cy > qr_cy else -step_val
             )
-            self.move_relative(step_x, step_y)
+            self.move_relative(self._step_x, self._step_y)
             new_qr_cx, new_qr_cy, *_ = self.get_qr_pos(self.capture_array()[0])
-            self.move_relative(-step_x, -step_y)
+            self.move_relative(-self._step_x, -self._step_y)
             self.move_relative(
-                abs(cx - qr_cx) * step_x / abs(new_qr_cx - qr_cx),
-                abs(cy - qr_cy) * step_y / abs(new_qr_cy - qr_cy),
+                abs(cx - qr_cx) * self._step_x / abs(new_qr_cx - qr_cx),
+                abs(cy - qr_cy) * self._step_y / abs(new_qr_cy - qr_cy),
             )
             x, y, z = self.get_position()
+            if precise_focusing is True:
+                self.set_crop(0, 0, 0, 0)
+                image, _ = self.capture_array()
+                cx, cy, min_x, min_y, max_x, max_y = self.get_qr_pos(image)
+                self.set_crop(
+                    top=min_y,
+                    bottom=image.shape[0] - max_y,
+                    left=min_x,
+                    right=image.shape[1] - max_x,
+                )
+                z = self.get_focused_z(switch_state=False)
             self.build_snake(x, y)
             return x, y, z
         finally:
@@ -716,25 +786,12 @@ class EnderLeafController(object):
     def init_job(self, precise_focusing: bool = True, switch_state: bool = False):
         if self.printer_ready() is False:
             return
+        self.shutter(True)
         if switch_state is True:
             self.switch_state(CameraState.STILL)
-        x, y, z = self.center_on_qr_code(switch_state=False)
-        if precise_focusing is True:
-            self.backup_crop_values()
-            try:
-                self.set_crop(0, 0, 0, 0)
-                image, _ = self.capture_array()
-                cx, cy, min_x, min_y, max_x, max_y = self.get_qr_pos(image)
-                self.set_crop(
-                    top=min_y,
-                    bottom=image.shape[0] - max_y,
-                    left=min_x,
-                    right=image.shape[1] - max_x,
-                )
-                z = self.get_focused_z(switch_state=False)
-                self.build_snake(x, y)
-            finally:
-                self.restore_crop_values()
+        x, y, z = self.center_on_qr_code(
+            switch_state=False, precise_focusing=precise_focusing
+        )
         exp_name = self.get_qr_data(self.capture_array()[0])["info"][0].replace(
             "_", "#"
         )
@@ -772,35 +829,45 @@ class EnderLeafController(object):
             )
         ]
 
-    def launch_acquisition(
-        self, precise_focusing: bool = True, switch_state: bool = False
+    @time_method
+    def acquire_leaf_disc(
+        self,
+        switch_state: bool = False,
+        center_on_leaf: bool = False,
+        exp_name: str | None = None,
+        r: str | None = None,
+        c: int | None = None,
+        start_ts: str | None = None,
+        dst_folder: Path | None = None,
+        z: float | None = None,
     ):
-        self._last_job_data = []
-        exp_name, exp, inoc, plate, z = self.init_job(
-            precise_focusing=precise_focusing, switch_state=switch_state
-        )
-        files = []
+        if switch_state is True:
+            self.switch_state(CameraState.STILL)
+        cycle_id = int(format_datetime())
+        file_paths = []
+        images = []
+        metadatas = []
         df = pd.DataFrame()
-
-        fld_images = DST_FLD.joinpath("images", exp, inoc)
-        fld_data = DST_FLD.joinpath("job_data", exp, inoc)
-        ensure_folder(fld_images)
-        ensure_folder(fld_data)
-        start_ts = format_datetime(dt.now())
-        data_file_name = fld_data.joinpath(
-            exp + "#I" + str(inoc) + "#P" + str(plate) + "#" + start_ts
-        ).with_suffix(".csv")
-
-        for idx, p, c, r in self.parse_positions():
-            self.move_position(np.append(p, z), index=idx)
-            file_path = fld_images.joinpath(
+        for light_conf in self.acq_light_configurations:
+            if len(self.acq_light_configurations) > 1:
+                self.set_lights(light_conf, wait=0.2)
+            image, metadata = self.capture_array()
+            images.append(image)
+            if exp_name is None:
+                metadatas.append(metadata)
+                continue
+            file_path = dst_folder.joinpath(
                 f"{exp_name}#{r}#{c}#{format_datetime()}"
             ).with_suffix(".png")
-            files.append(file_path)
-            image, metadata = self.capture_array()
+            file_paths.append(file_path)
             metadata = (
                 expand_file_path(file_path)
                 | {"job_ts": [start_ts]}
+                | {"cycle_id": [cycle_id]}
+                | {"north": [CardPoint.NORTH in light_conf]}
+                | {"east": [CardPoint.EAST in light_conf]}
+                | {"south": [CardPoint.SOUTH in light_conf]}
+                | {"west": [CardPoint.WEST in light_conf]}
                 | extract_metadata(metadata=metadata)
                 | {
                     "height": [z],
@@ -811,16 +878,49 @@ class EnderLeafController(object):
                     "top_light_intensity": [self.top_lights.default_intensity],
                 }
             )
-            self._last_job_data.append((image, metadata))
-            cv2.imwrite(str(file_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+            metadatas.append(metadata)
             df = pd.concat([df, pd.DataFrame(metadata)])
+        if switch_state is True:
+            self.switch_state(CameraState.VIDEO)
+        return images, metadatas, file_paths, df
+
+    def launch_acquisition(
+        self, precise_focusing: bool = True, switch_state: bool = False
+    ):
+        exp_name, exp, inoc, plate, z = self.init_job(
+            precise_focusing=precise_focusing, switch_state=switch_state
+        )
+        df = pd.DataFrame()
+
+        fld_images = DST_FLD.joinpath("images", exp, inoc)
+        fld_data = DST_FLD.joinpath("job_data", exp, inoc)
+        ensure_folder(fld_images)
+        ensure_folder(fld_data)
+        start_ts = format_datetime(dt.now())
+        data_file_name = fld_data.joinpath(
+            exp + "#I" + str(inoc) + "#P" + str(plate) + "#" + start_ts
+        ).with_suffix(".csv")
+        self.set_lights(self.acq_light_configurations[0])
+        for idx, p, c, r in self.parse_positions()[:5]:
+            self.move_position(np.append(p, z), index=idx)
+            images, metadatas, file_paths, df_cycle = self.acquire_leaf_disc(
+                exp_name=exp_name,
+                r=r,
+                c=c,
+                start_ts=start_ts,
+                dst_folder=fld_images,
+                z=z,
+            )
+            df = pd.concat([df, df_cycle])
+            for file_path, image, metadata in zip(file_paths, images, metadatas):
+                cv2.imwrite(str(file_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
         write_dataframe(df, data_file_name)
         self.call_update_position_plot()
 
         if switch_state is True:
             self.switch_state(CameraState.VIDEO)
 
-        self.go_rest()
+        # self.go_rest()
 
     def check_discs_positions(
         self, precise_focusing: bool = False, switch_state: bool = True
@@ -864,7 +964,3 @@ class EnderLeafController(object):
         self.crop_mode = old_crop_mode
         if switch_state is True:
             self.switch_state(CameraState.VIDEO)
-
-    @property
-    def last_job_data(self):
-        return self._last_job_data
