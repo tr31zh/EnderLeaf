@@ -14,6 +14,7 @@ except:
 
     class board(Enum):
         D18 = "d18"
+        D23 = "d23"
 
     import numpy as np
 
