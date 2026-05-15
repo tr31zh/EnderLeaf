@@ -62,6 +62,12 @@ class CameraState(Enum):
     SIMULATION = "simulation"
 
 
+class ELStatus(Enum):
+    IDLE = "Idle"
+    JOB_IN_PROGRESS = "Job in progress"
+    STOP_REQUESTED = "Stop requested"
+
+
 def expand_file_path(file_path: Path, use_file_ts: bool = False):
     file_name = file_path.with_suffix("").name.replace("_", "#")
     file_parts = file_name.split("#")
@@ -110,6 +116,7 @@ def extract_metadata(metadata):
 
 
 class EnderLeafController(object):
+    # MARK: Init
     def __init__(self):
         # Camera
         self.stop_event = Event()
@@ -148,16 +155,16 @@ class EnderLeafController(object):
         self._good_discs = []
         self._bad_discs = []
         self._ligths_cycle_index = 0
-        self._step_x = 0
-        self._step_y = 0
+        self._px_to_mm = -1
+        self.status = ELStatus.IDLE
 
         # Callbacks
         self.update_preview = None
         self.update_still = None
-        self.update_z_pos = None
         self.update_position_plot = None
         self.update_focus_plot = None
         self.update_positions = None
+        self.update_progress = None
 
     def reset(self):
         self.crop_left = 1200
@@ -555,14 +562,12 @@ class EnderLeafController(object):
         if self.printer_ready() is False:
             return
         self._stage.finish_moves()
-        if self.update_z_pos is not None:
-            self.update_z_pos(self.get_position()[2])
 
     def call_update_position_plot(self, index: int | list | None = None):
         if self.update_position_plot is None:
             pass
         elif len(self._positions) == 0:
-            self.update_position_plot(None)
+            self.update_position_plot(plot_path_status(z=self.get_position()[2]))
         elif len(self._good_discs) > 0 or len(self._bad_discs) > 0:
             self.update_position_plot(
                 plot_discs_status(
@@ -570,12 +575,18 @@ class EnderLeafController(object):
                     good_discs=self._good_discs,
                     bad_discs=self._bad_discs,
                     highlighted_indexes=index,
+                    title="",
+                    z=self.get_position()[2],
                 )
             )
         else:
             self.update_position_plot(
                 plot_path_status(
-                    path=self._positions, circle_diam=17, highlighted_indexes=index
+                    path=self._positions,
+                    circle_diam=17,
+                    highlighted_indexes=index,
+                    title="",
+                    z=self.get_position()[2],
                 )
             )
 
@@ -688,7 +699,9 @@ class EnderLeafController(object):
         variances = {}
 
         for z in zrange:
-            self.move_position([pos[0], pos[1], z + self.focus_start_z])
+            self.move_position(
+                [pos[0], pos[1], z + self.focus_start_z], update_position_plot=False
+            )
             img, _ = self.capture_array()
             grayImage = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
             score = lap_var(grayImage)
@@ -697,7 +710,9 @@ class EnderLeafController(object):
                 mxScore = score
                 bestZ = z
 
-        self.move_position([pos[0], pos[1], self.focus_start_z])
+        self.move_position(
+            [pos[0], pos[1], self.focus_start_z], update_position_plot=False
+        )
 
         if self.update_focus_plot is not None:
             fig = Figure(figsize=(4, 4))
@@ -720,6 +735,16 @@ class EnderLeafController(object):
 
         return bestZ + self.focus_start_z
 
+    # MARK: Center On QR
+    def center_on_target(
+        self, target_x: float, target_y: float, current_x: float, current_y: float
+    ):
+        self.move_relative(
+            -(target_x - current_x) * self._px_to_mm,
+            (target_y - current_y) * self._px_to_mm,
+            0,
+        )
+
     def center_on_qr_code(
         self, step_val=10, switch_state: bool = False, precise_focusing: bool = True
     ):
@@ -730,8 +755,8 @@ class EnderLeafController(object):
         self.backup_crop_values()
         self._good_discs = []
         self._bad_discs = []
-        self._step_x = 0
-        self._step_y = 0
+        step_x = 0
+        step_y = 0
         try:
             self.set_crop(0, 0, 0, 0)
             self.move_absolute(bed.qr_start_x, bed.qr_start_y, bed.individual_height)
@@ -739,15 +764,19 @@ class EnderLeafController(object):
             image, _ = self.capture_array()
             cy, cx = image.shape[0] // 2, image.shape[1] // 2
             qr_cx, qr_cy, *_ = self.get_qr_pos(image)
-            self._step_x, self._step_y = -step_val if cx > qr_cx else step_val, (
+
+            step_x, step_y = -step_val if cx > qr_cx else step_val, (
                 step_val if cy > qr_cy else -step_val
             )
-            self.move_relative(self._step_x, self._step_y)
+            self.move_relative(step_x, step_y)
             new_qr_cx, new_qr_cy, *_ = self.get_qr_pos(self.capture_array()[0])
-            self.move_relative(-self._step_x, -self._step_y)
-            self.move_relative(
-                abs(cx - qr_cx) * self._step_x / abs(new_qr_cx - qr_cx),
-                abs(cy - qr_cy) * self._step_y / abs(new_qr_cy - qr_cy),
+
+            self._px_to_mm = 1 / (
+                (abs(qr_cx - new_qr_cx) + abs(qr_cy - new_qr_cy)) / 2 / 10
+            )
+
+            self.center_on_target(
+                target_x=cx, target_y=cy, current_x=new_qr_cx, current_y=new_qr_cy
             )
             x, y, z = self.get_position()
             if precise_focusing is True:
@@ -783,6 +812,7 @@ class EnderLeafController(object):
         if switch_state is True:
             self.switch_state(CameraState.VIDEO)
 
+    # MARK: Init Job
     def init_job(self, precise_focusing: bool = True, switch_state: bool = False):
         if self.printer_ready() is False:
             return
@@ -829,7 +859,7 @@ class EnderLeafController(object):
             )
         ]
 
-    @time_method
+    # @time_method
     def acquire_leaf_disc(
         self,
         switch_state: bool = False,
@@ -843,11 +873,20 @@ class EnderLeafController(object):
     ):
         if switch_state is True:
             self.switch_state(CameraState.STILL)
-        cycle_id = int(format_datetime())
+        cycle_id = (
+            int(format_datetime()) if len(self.acq_light_configurations) > 1 else None
+        )
         file_paths = []
         images = []
         metadatas = []
         df = pd.DataFrame()
+        if center_on_leaf is True:
+            image, _ = self.capture_array()
+            cy, cx = image.shape[0] // 2, image.shape[1] // 2
+            circles = get_circles(image, channel="s", resize_factor=8)
+            if len(circles["accepted"]) == 1:
+                _, ccx, ccy, _r = circles["accepted"][0]
+                self.center_on_target(cx, cy, ccx, ccy)
         for light_conf in self.acq_light_configurations:
             if len(self.acq_light_configurations) > 1:
                 self.set_lights(light_conf, wait=0.2)
@@ -862,12 +901,15 @@ class EnderLeafController(object):
             file_paths.append(file_path)
             metadata = (
                 expand_file_path(file_path)
-                | {"job_ts": [start_ts]}
-                | {"cycle_id": [cycle_id]}
-                | {"north": [CardPoint.NORTH in light_conf]}
-                | {"east": [CardPoint.EAST in light_conf]}
-                | {"south": [CardPoint.SOUTH in light_conf]}
-                | {"west": [CardPoint.WEST in light_conf]}
+                | {
+                    "job_ts": [start_ts],
+                    "cycle_id": [cycle_id],
+                    "north": [CardPoint.NORTH in light_conf],
+                    "east": [CardPoint.EAST in light_conf],
+                    "south": [CardPoint.SOUTH in light_conf],
+                    "west": [CardPoint.WEST in light_conf],
+                    "center_on_leaf": center_on_leaf,
+                }
                 | extract_metadata(metadata=metadata)
                 | {
                     "height": [z],
@@ -884,9 +926,16 @@ class EnderLeafController(object):
             self.switch_state(CameraState.VIDEO)
         return images, metadatas, file_paths, df
 
+    # MARK: Launch
     def launch_acquisition(
-        self, precise_focusing: bool = True, switch_state: bool = False
+        self,
+        precise_focusing: bool = True,
+        switch_state: bool = False,
+        center_on_leaf: bool = False,
     ):
+        if self.printer_ready() is False:
+            return
+        self.status = ELStatus.JOB_IN_PROGRESS
         exp_name, exp, inoc, plate, z = self.init_job(
             precise_focusing=precise_focusing, switch_state=switch_state
         )
@@ -901,7 +950,9 @@ class EnderLeafController(object):
             exp + "#I" + str(inoc) + "#P" + str(plate) + "#" + start_ts
         ).with_suffix(".csv")
         self.set_lights(self.acq_light_configurations[0])
-        for idx, p, c, r in self.parse_positions()[:5]:
+        job_list = self.parse_positions()
+        len_job_list = len(job_list)
+        for idx, p, c, r in job_list:
             self.move_position(np.append(p, z), index=idx)
             images, metadatas, file_paths, df_cycle = self.acquire_leaf_disc(
                 exp_name=exp_name,
@@ -910,17 +961,23 @@ class EnderLeafController(object):
                 start_ts=start_ts,
                 dst_folder=fld_images,
                 z=z,
+                center_on_leaf=center_on_leaf,
             )
             df = pd.concat([df, df_cycle])
-            for file_path, image, metadata in zip(file_paths, images, metadatas):
+            for file_path, image in zip(file_paths, images):
                 cv2.imwrite(str(file_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+            if self.update_progress is not None:
+                self.update_progress(idx, len_job_list)
+            if self.status == ELStatus.STOP_REQUESTED:
+                break
         write_dataframe(df, data_file_name)
         self.call_update_position_plot()
 
         if switch_state is True:
             self.switch_state(CameraState.VIDEO)
 
-        # self.go_rest()
+        self.go_rest()
+        self.status = ELStatus.IDLE
 
     def check_discs_positions(
         self, precise_focusing: bool = False, switch_state: bool = True
@@ -934,7 +991,7 @@ class EnderLeafController(object):
         old_crop_mode = self.crop_mode
         self.crop_mode = CropMode.CROP.value
 
-        for idx, p, *_ in self.parse_positions()[:10]:
+        for idx, p, *_ in self.parse_positions():
             self.move_position(np.append(p, z), index=idx, update_position_plot=False)
             image, _ = self.capture_array()
             circles = get_circles(

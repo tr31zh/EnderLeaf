@@ -116,15 +116,23 @@ def plot_path(
                 plt.gca().add_patch(c)
 
 
+def plot_height(ax, z: float = 0):
+    ax.bar(["z"], [z], width=0.5)
+    ax.set_ylim(bed.z_min, bed.z_max)
+    ax.set_yticks([])
+
+
 def plot_path_status(
     path: np.ndarray | None = None,
-    title="PAth status",
+    title="Path status",
     circle_diam: float | None = None,
     highlighted_indexes: int | list | None = None,
+    z: float = 0,
 ):
-    fig = Figure(figsize=(4, 4))
-    ax = fig.subplots(nrows=1, ncols=1)
-    ax.add_patch(
+    fig = Figure(figsize=(4.8, 4))
+    ax_path, ax_height = fig.subplots(nrows=1, ncols=2, width_ratios=(0.9, 0.1))
+    plot_height(ax_height, z)
+    ax_path.add_patch(
         Rectangle(
             (0, 0),
             bed.x_max,
@@ -134,19 +142,18 @@ def plot_path_status(
             linewidth=1,
         )
     )
-    # ax.axis("equal")
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_xlim(bed.x_min, bed.x_max)
-    ax.set_ylim(bed.y_min, bed.y_max)
-    ax.set_xlabel("x axis")
-    ax.set_ylabel("y axis")
-    ax.set_title(title)
+    ax_path.set_xticks([])
+    ax_path.set_yticks([])
+    ax_path.set_xlim(bed.x_min, bed.x_max)
+    ax_path.set_ylim(bed.y_min, bed.y_max)
+    ax_path.set_xlabel("x axis")
+    ax_path.set_ylabel("y axis")
+    ax_path.set_title(title)
     if path is None:
         return fig
     x = path[:, 0]
     y = path[:, 1]
-    ax.plot(x, y, marker=".")
+    ax_path.plot(x, y, marker=".")
     for idx, (x_pos, y_pos) in enumerate(zip(x, y)):
         if highlighted_indexes is None:
             facecolor = "none"
@@ -159,7 +166,7 @@ def plot_path_status(
                 else "lightgreen" if highlighted_indexes == idx else "lightblue"
             )
         if circle_diam is not None:
-            ax.add_patch(
+            ax_path.add_patch(
                 Circle(
                     xy=(x_pos, y_pos),
                     radius=circle_diam / 2,
@@ -179,10 +186,12 @@ def plot_discs_status(
     highlighted_indexes: list = [],
     title="Disc status",
     circle_diam: float = 17,
+    z: float = 0,
 ):
-    fig = Figure(figsize=(4, 4))
-    ax = fig.subplots(nrows=1, ncols=1)
-    ax.add_patch(
+    fig = Figure(figsize=(4.8, 4))
+    ax_path, ax_height = fig.subplots(nrows=1, ncols=2, width_ratios=(0.9, 0.1))
+    plot_height(ax_height, z)
+    ax_path.add_patch(
         Rectangle(
             (0, 0),
             bed.x_max,
@@ -192,21 +201,20 @@ def plot_discs_status(
             linewidth=1,
         )
     )
-    ax.axis("equal")
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_xlim(bed.x_min, bed.x_max)
-    ax.set_ylim(bed.y_min, bed.y_max)
-    ax.set_xlabel("x axis")
-    ax.set_ylabel("y axis")
-    ax.set_title(title)
+    ax_path.set_xticks([])
+    ax_path.set_yticks([])
+    ax_path.set_xlim(bed.x_min, bed.x_max)
+    ax_path.set_ylim(bed.y_min, bed.y_max)
+    ax_path.set_xlabel("x axis")
+    ax_path.set_ylabel("y axis")
+    ax_path.set_title(title)
     if path is None:
         return fig
     x = path[:, 0]
     y = path[:, 1]
-    ax.plot(x, y, marker=".")
+    ax_path.plot(x, y, marker=".")
     for idx, (x_pos, y_pos) in enumerate(zip(x, y)):
-        ax.add_patch(
+        ax_path.add_patch(
             Circle(
                 xy=(x_pos, y_pos),
                 radius=circle_diam / 2,

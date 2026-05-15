@@ -238,7 +238,7 @@ def merge_images(
             result = np.median(image_list, axis=0).astype(np.uint8)
         case _:
             raise NotImplementedError(f"Unknown mode '{merge_mode}")
-    
+
     return result
 
 
@@ -295,8 +295,8 @@ def filter_circles(circles, img_width, img_height):
 
 def get_circles(
     image,
-    color_space,
-    channel,
+    color_space: str = "hsv",
+    channel: str = "s",
     min_threshold=100,
     max_threshold=200,
     aperture=3,
@@ -340,9 +340,11 @@ def get_circles(
             for a, x, y, r in v
         ]
         for k, v in circles.items()
-    }
+    } | {"edges": edges}
 
-def crop_best_circle(image,
+
+def crop_best_circle(
+    image,
     color_space,
     channel,
     min_threshold=100,
@@ -357,8 +359,8 @@ def crop_best_circle(image,
     circles = get_circles(**locals())
     if len(circles["accepted"]) == 1:
         accu, cx, cy, r = circles["accepted"][0]
-        
-        return crop_image(out_crop, Rectangle.from_circle((cx, cy, r + 16)))
+
+        return crop_image(image, Rectangle.from_circle((cx, cy, r + 16)))
     else:
         return image
 

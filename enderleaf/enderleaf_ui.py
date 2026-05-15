@@ -17,11 +17,14 @@ from enderscope.scan_patterns import plot_path_status
 from enderscope.bed import bed
 from enderleaf.tools import ensure_folder
 from enderleaf.image import to_pil, safe_pil_resize
-from enderleaf.enderleaf_ctrl import EnderLeafController, CropMode
+from enderleaf.enderleaf_ctrl import EnderLeafController, CropMode, ELStatus
 
 pn.extension("ace", "jsoneditor", "ipywidgets")
 
 SIDE_BAR_WIDTH = 300
+LO_PRECISE_FOCUS = "Precise focus"
+LO_SWITCH_STATE = "Switch camera state"
+LO_CENTER_OL = "Center on leaf"
 
 _working = False
 
@@ -42,29 +45,24 @@ def working(method):
 
 
 # MARK: Controller Callbacks
-video_pane = pn.pane.Image(sizing_mode="stretch_width")
-still_pane = pn.pane.Image(sizing_mode="stretch_width")
-plt_z = pn.indicators.LinearGauge(
-    name="Z position",
-    value=0,
-    bounds=(bed.z_min, bed.z_max),
-    width=60,
-    sizing_mode="stretch_height",
-    format="",
-    align="start",
-)
+video_pane = pn.pane.Image(sizing_mode="stretch_width", max_height=400)
+still_pane = pn.pane.Image(sizing_mode="stretch_width", max_height=400)
 plt_position = pn.pane.Matplotlib(
-    object=plot_path_status(),
+    object=plot_path_status(title=""),
     sizing_mode="stretch_width",
-    height=300,
-    align="start",
+    height=260,
+    align="center",
 )
-plt_focus = pn.pane.Matplotlib(sizing_mode="stretch_width", height=300, align="start")
+plt_focus = pn.pane.Matplotlib(sizing_mode="stretch_width", height=300, align="center")
 sel_position = pn.widgets.Select(
     name="Position", sizing_mode="stretch_width", options=[]
 )
 
-json_camera_config = pn.pane.JSON(object=None, name="Camera configuration", depth=-1)
+json_camera_config = pn.pane.JSON(
+    object=None, name="Camera configuration", depth=-1, sizing_mode="stretch_width"
+)
+
+pg_progress = pn.indicators.Progress(value=0, sizing_mode="stretch_width")
 
 
 def on_update_preview(image):
@@ -73,10 +71,6 @@ def on_update_preview(image):
 
 def on_update_still(image):
     still_pane.object = safe_pil_resize(to_pil(image), new_width=1024, new_height=768)
-
-
-def on_z_moved(z):
-    plt_z.value = z
 
 
 def on_update_position_plot(new_plot):
@@ -106,15 +100,15 @@ def post_callback(request):
         _working = False
 
 
+def on_progress_updated(current, total):
+    if pg_progress.max != total:
+        pg_progress.max = total
+    pg_progress.value = current + 1
+
+
 # MARK: Controller
 controller = EnderLeafController()
-controller.update_preview = on_update_preview
-controller.update_still = on_update_still
-controller.update_z_pos = on_z_moved
-controller.update_focus_plot = on_update_focus_plot
-controller.update_position_plot = on_update_position_plot
-controller.update_positions = on_update_positions
-controller.camera.post_callback = post_callback
+pg_progress.max = controller.plate_row_count * controller.plate_col_count
 
 # MARK: Widgets
 json_camera_controls = pn.widgets.JSONEditor(
@@ -146,30 +140,9 @@ bt_preview_stop = pn.widgets.Button(
     sizing_mode="stretch_width",
 )
 
-# sel_focus_mode = pn.widgets.Select(
-#     name="Focus mode",
-#     sizing_mode="stretch_width",
-#     value=controls.AfModeEnum.Manual.value,
-#     options={
-#         afm.name: afm.value
-#         for afm in [
-#             controls.AfModeEnum.Manual,
-#             controls.AfModeEnum.Auto,
-#             controls.AfModeEnum.Continuous,
-#         ]
-#     },
-# )
 bt_focus = pn.widgets.Button(name="Focus", sizing_mode="stretch_width")
 bt_focus_close = pn.widgets.Button(name="Focus close", sizing_mode="stretch_width")
 bt_focus_far = pn.widgets.Button(name="Focus far", sizing_mode="stretch_width")
-
-# focus_min, focus_max = controller.camera.camera_controls["LensPosition"][:2]
-# fs_focus_distance = pn.widgets.FloatSlider(
-#     name="Lens Position",
-#     sizing_mode="stretch_width",
-#     start=focus_min,
-#     end=focus_max,
-# )
 
 sel_printer = pn.widgets.Select(
     name="Select serial connection",
@@ -291,9 +264,22 @@ ii_focus_delta_z = pn.widgets.IntInput(
     name="Focus ΔZ", sizing_mode="stretch_width", value=controller.focus_delta_z
 )
 bt_launch_acquisition = pn.widgets.Button(
-    name="Launch image capture",
+    name="Launch job",
     icon="player-play",
     icon_size="2em",
+    sizing_mode="stretch_width",
+)
+bt_stop_acquisition = pn.widgets.Button(
+    name="Stop",
+    icon="circle-dashed-x",
+    icon_size="2em",
+    sizing_mode="stretch_width",
+    button_type="danger",
+)
+cbg_launch_options = pn.widgets.CheckBoxGroup(
+    name="Launch options",
+    options=[LO_PRECISE_FOCUS, LO_SWITCH_STATE, LO_CENTER_OL],
+    value=[LO_PRECISE_FOCUS, LO_SWITCH_STATE, LO_CENTER_OL],
     sizing_mode="stretch_width",
 )
 bt_check_discs = pn.widgets.Button(
@@ -314,7 +300,14 @@ eis_lights_top_intensity = pn.widgets.EditableIntSlider(
 
 
 # MARK: Cards
-crd_preview = pn.layout.Card(
+crd_live_preview = pn.layout.Card(
+    objects=[video_pane], title="Live preview", collapsed=False
+)
+crd_still_preview = pn.layout.Card(
+    objects=[still_pane], title="Still preview", collapsed=True
+)
+
+crd_preview_options = pn.layout.Card(
     objects=[
         sel_sensor_modes,
         bt_capture_still,
@@ -326,7 +319,7 @@ crd_preview = pn.layout.Card(
             # fs_focus_distance,
         ),
     ],
-    title="Preview",
+    title="Preview controls",
     collapsed=True,
 )
 crd_init = pn.layout.Card(
@@ -340,6 +333,7 @@ crd_init = pn.layout.Card(
 )
 crd_configure = pn.layout.Card(
     objects=[
+        pn.layout.WidgetBox("### Launh options", cbg_launch_options),
         pn.layout.WidgetBox(
             "### Crop",
             ii_crop_top,
@@ -368,7 +362,8 @@ crd_move = pn.layout.Card(
         pn.Row(bt_move_to, sel_position),
         bt_check_discs,
         pn.Row(bt_lights_toggle, bt_lights_cycle),
-        bt_launch_acquisition,
+        pn.Row(bt_launch_acquisition, bt_stop_acquisition),
+        pg_progress,
     ],
     title="Control",
     collapsed=False,
@@ -436,9 +431,15 @@ def on_check_corners(event):
 
 def on_launch_acquisition(event):
     controller.launch_acquisition(
-        switch_state=True,
-        # precise_focusing=False,
+        precise_focusing=LO_PRECISE_FOCUS in cbg_launch_options.value,
+        switch_state=LO_SWITCH_STATE in cbg_launch_options.value,
+        center_on_leaf=LO_CENTER_OL in cbg_launch_options.value,
     )
+
+
+def on_cancel_request(event):
+    if controller.status == ELStatus.JOB_IN_PROGRESS:
+        controller.status = ELStatus.STOP_REQUESTED
 
 
 def on_check_disc_positions(event):
@@ -457,6 +458,7 @@ def on_toggle_lights(event):
         bt_lights_toggle.icon = "bulb-off"
         bt_lights_toggle.button_type = "default"
         controller.shutter(False)
+
 
 def on_cycle_lights(event):
     controller.cycle_lights()
@@ -552,29 +554,38 @@ def on_plate_properties_changed(x, y, rc, cc, fs, fd):
 
 # MARK: UI
 def ui_sidebar():
-    return pn.Column(crd_preview, crd_init, crd_configure, crd_move)
+    return pn.Column(crd_preview_options, crd_init, crd_configure, crd_move)
 
 
 def ui_main():
-    return pn.layout.Tabs(
-        ("Preview", video_pane),
-        (
-            "Experiment",
-            pn.Column(pn.Row(plt_position, plt_z, plt_focus), still_pane),
-        ),
-        (
-            "Camera info",
-            pn.layout.Accordion(
-                ("Camera configuration", json_camera_config),
-                ("Camera controls", json_camera_controls),
-                active=[0],
+    return pn.Row(
+        pn.Column(crd_live_preview, crd_still_preview),
+        pn.Column(
+            pn.layout.Card(
+                objects=[plt_position], title="Camera position", collapsed=False
             ),
+            pn.layout.Card(objects=[plt_focus], title="Focus", collapsed=True),
+            pn.layout.Card(
+                objects=[json_camera_config],
+                title="Camera configuration",
+                collapsed=True,
+            ),
+            pn.layout.Card(
+                objects=[json_camera_controls], title="Camera controls", collapsed=True
+            ),
+            width=320,
         ),
-        active=0,
     )
 
 
 def ui_show():
+    controller.update_preview = on_update_preview
+    controller.update_still = on_update_still
+    controller.update_focus_plot = on_update_focus_plot
+    controller.update_position_plot = on_update_position_plot
+    controller.update_positions = on_update_positions
+    controller.update_progress = on_progress_updated
+    controller.camera.post_callback = post_callback
     controller.start()
     sidebar = ui_sidebar()
     sidebar.width = SIDE_BAR_WIDTH
