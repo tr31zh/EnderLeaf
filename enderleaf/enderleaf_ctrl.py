@@ -42,7 +42,15 @@ from enderscope.enderlights_pi import (
     LEN_LIGHTS_CYCLE,
 )
 from enderleaf.tools import ensure_folder, format_datetime, write_dataframe, time_method
-from enderleaf.image import crop_image, Rectangle, lap_var, get_circles
+from enderleaf.image import (
+    crop_image,
+    Rectangle,
+    var_entropy,
+    var_laplacian,
+    var_sobel,
+    var_combined,
+    get_circles,
+)
 from enderleaf.qr_reader import get_qr_data, get_points_extremes
 from enderleaf.draw import draw_circles
 
@@ -693,22 +701,38 @@ class EnderLeafController(object):
             self.switch_state(CameraState.STILL)
         zrange = np.array(range(-self.focus_delta_z, self.focus_delta_z, delta_z))
         pos = self.get_position()
-        self.focus_start_z
         mxScore = -1
         bestZ = 0
-        variances = {}
+        variances = {
+            "z": [],
+            "laplacian": [],
+            "entropy": [],
+            "sobel": [],
+            "combined": [],
+        }
 
         for z in zrange:
             self.move_position(
                 [pos[0], pos[1], z + self.focus_start_z], update_position_plot=False
             )
             img, _ = self.capture_array()
-            grayImage = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-            score = lap_var(grayImage)
-            variances[z + self.focus_start_z] = score
+            gray_image = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            laplacian = var_laplacian(gray_image, normalize=True)
+            entropy = var_entropy(gray_image, normalize=True)
+            sobel = var_sobel(gray_image, normalize=True)
+            comb = var_combined(
+                gray_image, entropy=entropy, laplacian=laplacian, sobel=sobel
+            )
+            variances["z"].append(z + self.focus_start_z)
+            variances["laplacian"].append(laplacian)
+            variances["entropy"].append(entropy)
+            variances["sobel"].append(sobel)
+            variances["combined"].append(comb)
+            score = laplacian
             if score > mxScore:
                 mxScore = score
                 bestZ = z
+        df_scores = pd.DataFrame(data=variances)
 
         self.move_position(
             [pos[0], pos[1], self.focus_start_z], update_position_plot=False
@@ -717,17 +741,24 @@ class EnderLeafController(object):
         if self.update_focus_plot is not None:
             fig = Figure(figsize=(4, 4))
             ax = fig.subplots(nrows=1, ncols=1)
-            fig.suptitle("Variance")
-            ax.plot(list(variances.keys()), list(variances.values()))
+            fig.suptitle("Variances")
+            for v in ["laplacian", "entropy", "sobel", "combined"]:
+                ax.plot(df_scores.z, df_scores[v], label=v)
             ax.add_patch(
                 Circle(
-                    xy=(pos[2] + bestZ, variances[pos[2] + bestZ]),
-                    radius=1,
+                    xy=(
+                        pos[2] + bestZ,
+                        df_scores[df_scores.z == self.focus_start_z + bestZ]
+                        .iloc[0]
+                        .laplacian,
+                    ),
+                    radius=0.1,
                     edgecolor="lime",
                     facecolor="lime",
                     linewidth=1,
                 )
             )
+            ax.legend()
             self.update_focus_plot(fig)
 
         if switch_state is True:
@@ -908,10 +939,7 @@ class EnderLeafController(object):
                     "east": [CardPoint.EAST in light_conf],
                     "south": [CardPoint.SOUTH in light_conf],
                     "west": [CardPoint.WEST in light_conf],
-                    "center_on_leaf": center_on_leaf,
-                }
-                | extract_metadata(metadata=metadata)
-                | {
+                    "center_on_leaf": [center_on_leaf],
                     "height": [z],
                     "crop_top": [self.crop_top],
                     "crop_bottom": [self.crop_bottom],
@@ -919,6 +947,7 @@ class EnderLeafController(object):
                     "crop_right": [self.crop_right],
                     "top_light_intensity": [self.top_lights.default_intensity],
                 }
+                | extract_metadata(metadata=metadata)
             )
             metadatas.append(metadata)
             df = pd.concat([df, pd.DataFrame(metadata)])
@@ -954,7 +983,7 @@ class EnderLeafController(object):
         len_job_list = len(job_list)
         for idx, p, c, r in job_list:
             self.move_position(np.append(p, z), index=idx)
-            images, metadatas, file_paths, df_cycle = self.acquire_leaf_disc(
+            images, _, file_paths, df_cycle = self.acquire_leaf_disc(
                 exp_name=exp_name,
                 r=r,
                 c=c,
