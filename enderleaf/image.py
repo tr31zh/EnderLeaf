@@ -242,67 +242,6 @@ def merge_images(
     return result
 
 
-VAR_MIN_MAX = {"entropy": (0.0, 8.0), "laplacian": (0.0, 1000.0), "sobel": (0.0, 500.0)}
-
-
-# Normalization function
-def normalize_measure(measure, key: str):
-    measure_min, measure_max = VAR_MIN_MAX[key]
-    return (measure - measure_min) / (measure_max - measure_min)
-
-
-# Entropic calculus function
-def var_entropy(img, normalize: bool = False):
-    p, n = np.histogram(img, bins=np.arange(256))
-    p = p / img.size
-    ent = 0
-    for i in p:
-        if i != 0:
-            ent = ent - i * np.log2(i)
-    if normalize is True:
-        return normalize_measure(ent, "entropy")
-    return ent
-
-
-# Laplacian variance calculus function
-def var_laplacian(img, normalize: bool = False):
-    laplacian = cv2.Laplacian(img, cv2.CV_32F)
-    variance = laplacian.var()
-    if normalize is True:
-        return normalize_measure(variance, "laplacian")
-    return variance
-
-
-# Sobel gradient calculus function
-def var_sobel(img, normalize: bool = False):
-    sobel_x = cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=3)
-    sobel_y = cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=3)
-    sobel = np.sqrt(sobel_x**2 + sobel_y**2)
-    variance = sobel.var()
-    if normalize is True:
-        return normalize_measure(variance, "sobel")
-    return variance
-
-
-# Combination of each function (Entropy, Variance of the Laplacian and the Sobel gradient)
-def var_combined(
-    img,
-    entropy: float | None = None,
-    laplacian: float | None = None,
-    sobel: float | None = None,
-):
-    variance_entropy = (
-        entropy if entropy is not None else var_entropy(img, normalize=True)
-    )
-    variance_laplacian = (
-        laplacian if laplacian is not None else var_laplacian(img, normalize=True)
-    )
-    variance_sobel = sobel if sobel is not None else var_sobel(img, normalize=True)
-
-    score = (variance_entropy + variance_laplacian + variance_sobel) / 3
-    return score
-
-
 def canny(
     image, color_space, channel, min_thresholf=100, max_threshold=200, aperture=3
 ):

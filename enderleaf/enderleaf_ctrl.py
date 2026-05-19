@@ -6,10 +6,13 @@ from enum import Enum
 import time
 from typing import Literal
 
+from tqdm import tqdm
+
 import numpy as np
 import cv2
 import pandas as pd
 
+import plotly.express as px
 from matplotlib.figure import Figure
 from matplotlib.patches import Circle
 
@@ -26,6 +29,7 @@ else:
     simulate_camera = False
 
 from enderleaf.streaming import StreamingOutput
+from enderleaf.focus_metrics import compute_focus_metric, FM_METHODS, FM_LAPV, FM_BREN
 from enderscope.scan_patterns import (
     snake,
     get_extremes,
@@ -42,15 +46,7 @@ from enderscope.enderlights_pi import (
     LEN_LIGHTS_CYCLE,
 )
 from enderleaf.tools import ensure_folder, format_datetime, write_dataframe, time_method
-from enderleaf.image import (
-    crop_image,
-    Rectangle,
-    var_entropy,
-    var_laplacian,
-    var_sobel,
-    var_combined,
-    get_circles,
-)
+from enderleaf.image import crop_image, Rectangle, get_circles, get_channel
 from enderleaf.qr_reader import get_qr_data, get_points_extremes
 from enderleaf.draw import draw_circles
 
@@ -150,6 +146,8 @@ class EnderLeafController(object):
         self.plate_col_count = 9
         self.focus_start_z = 36
         self.focus_delta_z = 10
+        self.focus_methods = [FM_BREN]
+        self.best_focus_method = FM_BREN
 
         self.top_lights = Enderlights(default_leds["groov_led"], default_intensity=255)
         self.acq_light_configurations = [LIGHTS_CYCLE[1]]
@@ -363,6 +361,9 @@ class EnderLeafController(object):
         self.focus_start_z = focus_start_z
         self.focus_delta_z = focus_delta_z
 
+    def set_controls(self, control_data: dict):
+        self.camera.set_controls(control_data)
+
     def set_exposure(self):
         avg_lights = self.top_lights.mean
         if avg_lights == 255:
@@ -399,7 +400,7 @@ class EnderLeafController(object):
             }
         else:
             cam_controls = {"AeEnable": True, "AwbEnable": True}
-        self.camera.set_controls(cam_controls)
+        self.set_controls(cam_controls)
 
     def set_top_lights(self, state: bool, card_points: list | None = None):
         if state is False:
@@ -643,6 +644,8 @@ class EnderLeafController(object):
                 self._stage = Stage(port, 115200)
                 self.go_home()
                 break
+        x, y, _ = self.get_position()
+        self.move_absolute(x, y, self.focus_start_z)
 
     def go_rest(self):
         if self.printer_ready() is False:
@@ -699,72 +702,95 @@ class EnderLeafController(object):
         self.set_focus_close()
         if switch_state is True:
             self.switch_state(CameraState.STILL)
-        zrange = np.array(range(-self.focus_delta_z, self.focus_delta_z, delta_z))
+        z_range = np.array(range(-self.focus_delta_z, self.focus_delta_z, delta_z))
         pos = self.get_position()
         mxScore = -1
         bestZ = 0
-        variances = {
-            "z": [],
-            "laplacian": [],
-            "entropy": [],
-            "sobel": [],
-            "combined": [],
-        }
+        variances = {"z": []} | {fm: [] for fm in self.focus_methods}
 
-        for z in zrange:
+        for i, z in enumerate(z_range):
             self.move_position(
                 [pos[0], pos[1], z + self.focus_start_z], update_position_plot=False
             )
+            time.sleep(0.2)
             img, _ = self.capture_array()
             gray_image = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-            laplacian = var_laplacian(gray_image, normalize=True)
-            entropy = var_entropy(gray_image, normalize=True)
-            sobel = var_sobel(gray_image, normalize=True)
-            comb = var_combined(
-                gray_image, entropy=entropy, laplacian=laplacian, sobel=sobel
-            )
             variances["z"].append(z + self.focus_start_z)
-            variances["laplacian"].append(laplacian)
-            variances["entropy"].append(entropy)
-            variances["sobel"].append(sobel)
-            variances["combined"].append(comb)
-            score = laplacian
+            for method in self.focus_methods:
+                _fm = compute_focus_metric(image=gray_image, method=method)
+                variances[method].append(_fm)
+                if method == self.best_focus_method:
+                    score = _fm
             if score > mxScore:
                 mxScore = score
-                bestZ = z
+                bestZ = z + self.focus_start_z
+            if self.update_progress is not None:
+                self.update_progress(i, len(z_range))
         df_scores = pd.DataFrame(data=variances)
-
-        self.move_position(
-            [pos[0], pos[1], self.focus_start_z], update_position_plot=False
+        for c in self.focus_methods:
+            df_scores[c] = (df_scores[c] - df_scores[c].min()) / (
+                df_scores[c].max() - df_scores[c].min()
+            )
+        df_scores["combined"] = df_scores[self.focus_methods].sum(axis=1) / len(
+            self.focus_methods
         )
 
+        self.move_position([pos[0], pos[1], bestZ], update_position_plot=False)
+
         if self.update_focus_plot is not None:
-            fig = Figure(figsize=(4, 4))
-            ax = fig.subplots(nrows=1, ncols=1)
-            fig.suptitle("Variances")
-            for v in ["laplacian", "entropy", "sobel", "combined"]:
-                ax.plot(df_scores.z, df_scores[v], label=v)
-            ax.add_patch(
-                Circle(
-                    xy=(
-                        pos[2] + bestZ,
-                        df_scores[df_scores.z == self.focus_start_z + bestZ]
-                        .iloc[0]
-                        .laplacian,
-                    ),
-                    radius=0.1,
-                    edgecolor="lime",
-                    facecolor="lime",
-                    linewidth=1,
-                )
+            # fig = Figure(figsize=(4, 4))
+            # ax = fig.subplots(nrows=1, ncols=1)
+            # fig.suptitle("Variances")
+            # for v in self.focus_methods + ["combined"]:
+            #     ax.plot(df_scores.z, df_scores[v], label=v)
+            # ax.add_patch(
+            #     Circle(
+            #         xy=(
+            #             bestZ,
+            #             df_scores[df_scores.z == bestZ].iloc[0][self.best_focus_method],
+            #         ),
+            #         radius=0.1,
+            #         edgecolor="lime",
+            #         facecolor="lime",
+            #         linewidth=1,
+            #     )
+            # )
+            # ax.legend()
+            fig = px.line(
+                pd.melt(
+                    df_scores,
+                    id_vars=["z"],
+                    value_vars=self.focus_methods + ["combined"],
+                ),
+                x="z",
+                y="value",
+                color="variable",
+                markers=True,
+                width=400,
             )
-            ax.legend()
+            fig.update_traces(mode="markers+lines", hovertemplate=None)
+            fig.update_layout(hovermode="x unified")
             self.update_focus_plot(fig)
 
         if switch_state is True:
             self.switch_state(CameraState.VIDEO)
 
-        return bestZ + self.focus_start_z
+        return df_scores
+
+        return (
+            df_scores[
+                df_scores[self.best_focus_method]
+                == df_scores[self.best_focus_method].max()
+            ]
+            .reset_index()
+            .iloc[0]
+            .z
+        )
+
+        # return {
+        #     k: df_scores[df_scores[k] == df_scores[k].max()].reset_index().iloc[0].z
+        #     for k in self.focus_methods + ["combined"]
+        # }
 
     # MARK: Center On QR
     def center_on_target(
@@ -921,6 +947,8 @@ class EnderLeafController(object):
         for light_conf in self.acq_light_configurations:
             if len(self.acq_light_configurations) > 1:
                 self.set_lights(light_conf, wait=0.2)
+            else:
+                time.sleep(0.2)
             image, metadata = self.capture_array()
             images.append(image)
             if exp_name is None:
@@ -1050,3 +1078,18 @@ class EnderLeafController(object):
         self.crop_mode = old_crop_mode
         if switch_state is True:
             self.switch_state(CameraState.VIDEO)
+
+    # MARK: Tools
+    def visualize_noise(self, image_count: int = 5) -> np.ndarray:
+        images = [
+            cv2.medianBlur(self.capture_array()[0], ksize=5)
+            for _ in tqdm(range(image_count))
+        ]
+        focus_data = np.array(
+            [
+                compute_focus_metric(cv2.cvtColor(image, cv2.COLOR_RGB2GRAY), FM_BREN)
+                for image in tqdm(images)
+            ]
+        )
+        img_min, img_max = (images[focus_data.argmin()], images[focus_data.argmax()])
+        return [img_min, img_max, np.abs(img_max - img_min)]

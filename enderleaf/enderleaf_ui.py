@@ -19,7 +19,7 @@ from enderleaf.tools import ensure_folder
 from enderleaf.image import to_pil, safe_pil_resize
 from enderleaf.enderleaf_ctrl import EnderLeafController, CropMode, ELStatus
 
-pn.extension("ace", "jsoneditor", "ipywidgets")
+pn.extension("ace", "plotly", "jsoneditor", "ipywidgets")
 
 SIDE_BAR_WIDTH = 300
 LO_PRECISE_FOCUS = "Precise focus"
@@ -45,15 +45,15 @@ def working(method):
 
 
 # MARK: Controller Callbacks
-video_pane = pn.pane.Image(sizing_mode="stretch_width", max_height=400)
-still_pane = pn.pane.Image(sizing_mode="stretch_width", max_height=400)
+video_pane = pn.pane.Image(sizing_mode="scale_width", max_height=400)
+still_pane = pn.pane.Image(sizing_mode="scale_width", max_height=400)
 plt_position = pn.pane.Matplotlib(
     object=plot_path_status(title=""),
-    sizing_mode="stretch_width",
+    sizing_mode="scale_width",
     height=260,
     align="center",
 )
-plt_focus = pn.pane.Matplotlib(sizing_mode="stretch_width", height=300, align="center")
+plt_focus = pn.pane.Plotly(sizing_mode="scale_width", height=330, align="center")
 sel_position = pn.widgets.Select(
     name="Position", sizing_mode="stretch_width", options=[]
 )
