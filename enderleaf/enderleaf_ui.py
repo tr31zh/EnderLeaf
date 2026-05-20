@@ -15,11 +15,12 @@ import panel as pn
 from enderscope.serial import list_ports, default_printer_port
 from enderscope.scan_patterns import plot_path_status
 from enderscope.bed import bed
+from enderleaf.draw import plot_focus_plt
 from enderleaf.tools import ensure_folder
 from enderleaf.image import to_pil, safe_pil_resize
 from enderleaf.enderleaf_ctrl import EnderLeafController, CropMode, ELStatus
 
-pn.extension("ace", "plotly", "jsoneditor", "ipywidgets")
+pn.extension("jsoneditor", "ipywidgets")
 
 SIDE_BAR_WIDTH = 300
 LO_PRECISE_FOCUS = "Precise focus"
@@ -50,10 +51,10 @@ still_pane = pn.pane.Image(sizing_mode="scale_width", max_height=400)
 plt_position = pn.pane.Matplotlib(
     object=plot_path_status(title=""),
     sizing_mode="scale_width",
-    height=260,
+    height=330,
     align="center",
 )
-plt_focus = pn.pane.Plotly(sizing_mode="scale_width", height=330, align="center")
+plt_focus = pn.pane.Matplotlib(sizing_mode="stretch_width", height=330, align="center")
 sel_position = pn.widgets.Select(
     name="Position", sizing_mode="stretch_width", options=[]
 )
@@ -77,8 +78,8 @@ def on_update_position_plot(new_plot):
     plt_position.object = new_plot
 
 
-def on_update_focus_plot(new_plot):
-    plt_focus.object = new_plot
+def on_update_focus_plot(df_scores):
+    plt_focus.object = plot_focus_plt(df=df_scores)
 
 
 def on_update_positions(positions):
@@ -193,10 +194,10 @@ bt_check_corners = pn.widgets.Button(
 )
 bt_lights_toggle = pn.widgets.Button(
     name="TOP lights",
-    icon="bulb-off",
+    icon="bulb",
     icon_size="2em",
     sizing_mode="stretch_width",
-    button_type="default",
+    button_type="success",
 )
 bt_lights_cycle = pn.widgets.Button(
     name="Cycle lights",
@@ -289,25 +290,18 @@ bt_check_discs = pn.widgets.Button(
     sizing_mode="stretch_width",
     button_type="warning",
 )
-eis_lights_top_intensity = pn.widgets.EditableIntSlider(
-    name="Intensity",
+eis_lights_top_brightness = pn.widgets.EditableFloatSlider(
+    name="Brightness",
     start=0,
-    end=255,
-    step=1,
-    value=controller.top_lights.default_intensity,
-    sizing_mode="stretch_width",
+    end=1.0,
+    step=0.05,
+    value=controller.top_lights.brightness,
+    sizing_mode="scale_width",
 )
 
 
 # MARK: Cards
-crd_live_preview = pn.layout.Card(
-    objects=[video_pane], title="Live preview", collapsed=False
-)
-crd_still_preview = pn.layout.Card(
-    objects=[still_pane], title="Still preview", collapsed=True
-)
-
-crd_preview_options = pn.layout.Card(
+crd_preview_options = pn.Column(
     objects=[
         sel_sensor_modes,
         bt_capture_still,
@@ -319,19 +313,19 @@ crd_preview_options = pn.layout.Card(
             # fs_focus_distance,
         ),
     ],
-    title="Preview controls",
-    collapsed=True,
+    # title="Preview controls",
+    # collapsed=False,
 )
-crd_init = pn.layout.Card(
+crd_init = pn.Column(
     objects=[
         pn.Row(bt_preview_start, bt_preview_stop),
         sel_printer,
         bt_connect_printer,
     ],
-    title="Initialize",
-    collapsed=False,
+    # title="Initialize",
+    # collapsed=False,
 )
-crd_configure = pn.layout.Card(
+crd_configure = pn.Column(
     objects=[
         pn.layout.WidgetBox("### Launh options", cbg_launch_options),
         pn.layout.WidgetBox(
@@ -349,13 +343,13 @@ crd_configure = pn.layout.Card(
         ),
         pn.layout.WidgetBox(
             "### Lights",
-            pn.Row(pn.pane.Str("TOP", width=20), eis_lights_top_intensity),
+            pn.Row(pn.pane.Str("TOP", width=20), eis_lights_top_brightness),
         ),
     ],
-    title="Configure",
-    collapsed=True,
+    # title="Configure",
+    # collapsed=False,
 )
-crd_move = pn.layout.Card(
+crd_move = pn.Column(
     objects=[
         pn.Row(bt_home, bt_idle, bt_park),
         pn.Row(bt_qr_code, bt_check_corners),
@@ -365,8 +359,8 @@ crd_move = pn.layout.Card(
         pn.Row(bt_launch_acquisition, bt_stop_acquisition),
         pg_progress,
     ],
-    title="Control",
-    collapsed=False,
+    # title="Control",
+    # collapsed=False,
 )
 
 
@@ -422,7 +416,10 @@ def on_park(event):
 
 
 def on_center_on_qr_code(event):
-    controller.center_on_qr_code(precise_focusing=True)
+    controller.center_on_qr_code(
+        precise_focusing=LO_PRECISE_FOCUS in cbg_launch_options.value,
+        switch_state=LO_SWITCH_STATE in cbg_launch_options.value,
+    )
 
 
 def on_check_corners(event):
@@ -494,9 +491,9 @@ def on_sensor_mode_changed(sensor_mode):
     controller.set_sensor_mode(sensor_mode)
 
 
-@pn.depends(eis_lights_top_intensity.param.value, watch=True)
-def on_top_intensity_changed(intensity):
-    controller.set_top_lights_intensity(intensity)
+@pn.depends(eis_lights_top_brightness.param.value, watch=True)
+def on_top_brightness_changed(brightness):
+    controller.top_lights.brightness = brightness
 
 
 # @working
@@ -554,25 +551,35 @@ def on_plate_properties_changed(x, y, rc, cc, fs, fd):
 
 # MARK: UI
 def ui_sidebar():
-    return pn.Column(crd_preview_options, crd_init, crd_configure, crd_move)
+    return pn.layout.Accordion(
+        ("Preview options", crd_preview_options),
+        ("Initialize", crd_init),
+        ("Configure", crd_configure),
+        ("Control", crd_move),
+        active=[1, 3],
+    )
+
+
+# crd_live_preview = pn.layout.Card(
+#     objects=[video_pane], title="Live preview", collapsed=False
+# )
+# crd_still_preview = pn.layout.Card(
+#     objects=[still_pane], title="Still preview", collapsed=False
+# )
 
 
 def ui_main():
     return pn.Row(
-        pn.Column(crd_live_preview, crd_still_preview),
-        pn.Column(
-            pn.layout.Card(
-                objects=[plt_position], title="Camera position", collapsed=False
-            ),
-            pn.layout.Card(objects=[plt_focus], title="Focus", collapsed=True),
-            pn.layout.Card(
-                objects=[json_camera_config],
-                title="Camera configuration",
-                collapsed=True,
-            ),
-            pn.layout.Card(
-                objects=[json_camera_controls], title="Camera controls", collapsed=True
-            ),
+        pn.layout.Accordion(
+            ("Live preview", video_pane), ("Still preview", still_pane), active=[0]
+        ),
+        # pn.Column(crd_live_preview, crd_still_preview),
+        pn.layout.Accordion(
+            ("Camera position", plt_position),
+            ("Focus", plt_focus),
+            ("Camera configuration", json_camera_config),
+            ("Camera control", json_camera_controls),
+            active=[0, 1],
             width=320,
         ),
     )

@@ -12,10 +12,6 @@ import numpy as np
 import cv2
 import pandas as pd
 
-import plotly.express as px
-from matplotlib.figure import Figure
-from matplotlib.patches import Circle
-
 try:
     from picamera2 import Picamera2
     from picamera2.encoders import JpegEncoder
@@ -46,7 +42,14 @@ from enderscope.enderlights_pi import (
     LEN_LIGHTS_CYCLE,
 )
 from enderleaf.tools import ensure_folder, format_datetime, write_dataframe, time_method
-from enderleaf.image import crop_image, Rectangle, get_circles, get_channel
+from enderleaf.image import (
+    crop_image,
+    Rectangle,
+    get_circles,
+    get_channel,
+    merge_images,
+    ImageMergeMode,
+)
 from enderleaf.qr_reader import get_qr_data, get_points_extremes
 from enderleaf.draw import draw_circles
 
@@ -149,10 +152,8 @@ class EnderLeafController(object):
         self.focus_methods = [FM_BREN]
         self.best_focus_method = FM_BREN
 
-        self.top_lights = Enderlights(default_leds["groov_led"], default_intensity=255)
+        self.top_lights = Enderlights(default_leds["groov_led"], brightness=1)
         self.acq_light_configurations = [LIGHTS_CYCLE[1]]
-
-        self.top_lights.shutter(False)
 
         self._positions = []
         self._old_crop_values = -1, -1, -1, -1
@@ -184,7 +185,7 @@ class EnderLeafController(object):
         self.plate_col_count = 9
         self.focus_start_z = 36
         self.focus_delta_z = 10
-        self.top_lights.default_intensity = 255
+        self.top_lights.brightness = 1.0
 
     def to_json(self) -> dict:
         return {
@@ -369,34 +370,38 @@ class EnderLeafController(object):
         if avg_lights == 255:
             cam_controls = {
                 "AeEnable": False,
-                "ExposureTime": 3000,
+                "ExposureTime": 5000,
                 "AnalogueGain": 1,
                 "AwbEnable": False,
-                "ColourGains": (2.3, 0.9),
+                "ColourGains": (2.4, 0.83),
+                "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.HighQuality,
             }
-        elif avg_lights == 63.75:
+        elif avg_lights == 191.25:
+            cam_controls = {
+                "AeEnable": False,
+                "ExposureTime": 6000,
+                "AnalogueGain": 1,
+                "AwbEnable": False,
+                "ColourGains": (2.4, 0.83),
+                "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.HighQuality,
+            }
+        elif avg_lights == 127.5:
             cam_controls = {
                 "AeEnable": False,
                 "ExposureTime": 12000,
                 "AnalogueGain": 1,
                 "AwbEnable": False,
-                "ColourGains": (2.3, 0.9),
+                "ColourGains": (2.4, 0.83),
+                "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.HighQuality,
             }
-        elif avg_lights == 127.5:
+        elif avg_lights == 63.75:
             cam_controls = {
                 "AeEnable": False,
-                "ExposureTime": 7000,
+                "ExposureTime": 24000,
                 "AnalogueGain": 1,
                 "AwbEnable": False,
-                "ColourGains": (2.3, 0.9),
-            }
-        elif avg_lights == 191.25:
-            cam_controls = {
-                "AeEnable": False,
-                "ExposureTime": 5000,
-                "AnalogueGain": 1,
-                "AwbEnable": False,
-                "ColourGains": (2.3, 0.9),
+                "ColourGains": (2.4, 0.83),
+                "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.HighQuality,
             }
         else:
             cam_controls = {"AeEnable": True, "AwbEnable": True}
@@ -418,21 +423,8 @@ class EnderLeafController(object):
 
     def shutter(self, state: bool, wait=1):
         self.top_lights.shutter(state=state)
-        self.camera.set_controls(
-            {
-                "AeEnable": False,
-                "ExposureTime": 3000,
-                "AnalogueGain": 1,
-                "AwbEnable": False,
-                "ColourGains": (2.3, 0.9),
-            }
-            if state is True
-            else {"AeEnable": True, "AwbEnable": True}
-        )
+        self.set_exposure()
         time.sleep(wait)
-
-    def toggle_lights(self):
-        self.shutter(int(self.top_lights.mean) == 0)
 
     def cycle_lights(self, wait=1):
         if self._ligths_cycle_index >= LEN_LIGHTS_CYCLE - 1:
@@ -441,8 +433,8 @@ class EnderLeafController(object):
             self._ligths_cycle_index += 1
         self.set_lights(LIGHTS_CYCLE[self._ligths_cycle_index], wait=wait)
 
-    def set_top_lights_intensity(self, intensity):
-        self.top_lights.default_intensity = intensity
+    def set_top_lights_brightness(self, brightness):
+        self.top_lights.brightness = brightness
 
     def set_sensor_mode(self, sensor_mode):
         self.camera.stop_recording()
@@ -463,12 +455,14 @@ class EnderLeafController(object):
             self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
 
     def set_focus_close(self):
-        self.camera.set_controls(
-            {"LensPosition": self.camera.camera_controls["LensPosition"][1]}
-        )
+        fc_pos = self.camera.camera_controls["LensPosition"][1]
+        if self.camera.capture_metadata()["LensPosition"] != fc_pos:
+            self.camera.set_controls({"LensPosition": fc_pos})
 
     def set_focus_far(self):
-        self.camera.set_controls({"LensPosition": 0})
+        ff_pos = self.camera.camera_controls["LensPosition"][0]
+        if self.camera.capture_metadata()["LensPosition"] != ff_pos:
+            self.camera.set_controls({"LensPosition": ff_pos})
 
     def capture_array(self):
         match self._camera_state:
@@ -540,6 +534,8 @@ class EnderLeafController(object):
             else:
                 self.thread = Thread(target=self.call_update_preview)
             self.thread.start()
+            self.set_focus_close()
+            self.shutter(True)
             time.sleep(0.5)
             if self._camera_state != CameraState.SIMULATION:
                 self._camera_state = CameraState.VIDEO
@@ -666,10 +662,11 @@ class EnderLeafController(object):
             or len(qr_data["info"]) == 0
             or len(qr_data["points"]) == 0
         ):
-            self.toggle_lights()
+            old_brightness = self.top_lights.brightness
+            self.top_lights.brightness = 0
             time.sleep(2)
             qr_data = get_qr_data(self.capture_array()[0])
-            self.toggle_lights()
+            self.top_lights.brightness = old_brightness
             time.sleep(2)
         return qr_data
 
@@ -737,45 +734,11 @@ class EnderLeafController(object):
 
         self.move_position([pos[0], pos[1], bestZ], update_position_plot=False)
 
-        if self.update_focus_plot is not None:
-            # fig = Figure(figsize=(4, 4))
-            # ax = fig.subplots(nrows=1, ncols=1)
-            # fig.suptitle("Variances")
-            # for v in self.focus_methods + ["combined"]:
-            #     ax.plot(df_scores.z, df_scores[v], label=v)
-            # ax.add_patch(
-            #     Circle(
-            #         xy=(
-            #             bestZ,
-            #             df_scores[df_scores.z == bestZ].iloc[0][self.best_focus_method],
-            #         ),
-            #         radius=0.1,
-            #         edgecolor="lime",
-            #         facecolor="lime",
-            #         linewidth=1,
-            #     )
-            # )
-            # ax.legend()
-            fig = px.line(
-                pd.melt(
-                    df_scores,
-                    id_vars=["z"],
-                    value_vars=self.focus_methods + ["combined"],
-                ),
-                x="z",
-                y="value",
-                color="variable",
-                markers=True,
-                width=400,
-            )
-            fig.update_traces(mode="markers+lines", hovertemplate=None)
-            fig.update_layout(hovermode="x unified")
-            self.update_focus_plot(fig)
+        # if self.update_focus_plot is not None:
+        #     self.update_focus_plot(df_scores)
 
         if switch_state is True:
             self.switch_state(CameraState.VIDEO)
-
-        return df_scores
 
         return (
             df_scores[
@@ -785,12 +748,7 @@ class EnderLeafController(object):
             .reset_index()
             .iloc[0]
             .z
-        )
-
-        # return {
-        #     k: df_scores[df_scores[k] == df_scores[k].max()].reset_index().iloc[0].z
-        #     for k in self.focus_methods + ["combined"]
-        # }
+        ), df_scores
 
     # MARK: Center On QR
     def center_on_target(
@@ -807,21 +765,24 @@ class EnderLeafController(object):
     ):
         if self.printer_ready() is False:
             return
+        self.set_focus_close()
         if switch_state is True:
             self.switch_state(CameraState.STILL)
+        self.set_focus_close()
+        self.shutter(True)
         self.backup_crop_values()
         self._good_discs = []
         self._bad_discs = []
-        step_x = 0
-        step_y = 0
         try:
             self.set_crop(0, 0, 0, 0)
-            self.move_absolute(bed.qr_start_x, bed.qr_start_y, bed.individual_height)
-            self.get_focused_z(switch_state=False)
+            self.move_absolute(bed.qr_start_x, bed.qr_start_y, self.focus_start_z)
             image, _ = self.capture_array()
             cy, cx = image.shape[0] // 2, image.shape[1] // 2
-            qr_cx, qr_cy, *_ = self.get_qr_pos(image)
-
+            try:
+                qr_cx, qr_cy, *_ = self.get_qr_pos(image)
+            except:
+                self.get_focused_z(switch_state=False)
+                qr_cx, qr_cy, *_ = self.get_qr_pos(image)
             step_x, step_y = -step_val if cx > qr_cx else step_val, (
                 step_val if cy > qr_cy else -step_val
             )
@@ -846,7 +807,7 @@ class EnderLeafController(object):
                     left=min_x,
                     right=image.shape[1] - max_x,
                 )
-                z = self.get_focused_z(switch_state=False)
+                z, _ = self.get_focused_z(switch_state=False)
             self.build_snake(x, y)
             return x, y, z
         finally:
@@ -857,6 +818,7 @@ class EnderLeafController(object):
     def check_corners(self, switch_state: bool = False):
         if self.printer_ready() is False:
             return
+        self.set_focus_close()
         if switch_state is True:
             self.switch_state(CameraState.STILL)
         x, y, z = self.center_on_qr_code(switch_state=False)
@@ -873,6 +835,7 @@ class EnderLeafController(object):
     def init_job(self, precise_focusing: bool = True, switch_state: bool = False):
         if self.printer_ready() is False:
             return
+        self.set_focus_close()
         self.shutter(True)
         if switch_state is True:
             self.switch_state(CameraState.STILL)
@@ -973,7 +936,7 @@ class EnderLeafController(object):
                     "crop_bottom": [self.crop_bottom],
                     "crop_left": [self.crop_left],
                     "crop_right": [self.crop_right],
-                    "top_light_intensity": [self.top_lights.default_intensity],
+                    "brightness": [self.top_lights.brightness],
                 }
                 | extract_metadata(metadata=metadata)
             )
@@ -992,6 +955,7 @@ class EnderLeafController(object):
     ):
         if self.printer_ready() is False:
             return
+        self.set_focus_close()
         self.status = ELStatus.JOB_IN_PROGRESS
         exp_name, exp, inoc, plate, z = self.init_job(
             precise_focusing=precise_focusing, switch_state=switch_state
@@ -1041,6 +1005,7 @@ class EnderLeafController(object):
     ):
         if self.printer_ready() is False:
             return
+        self.set_focus_close()
         *_, z = self.init_job(
             precise_focusing=precise_focusing, switch_state=switch_state
         )
@@ -1080,16 +1045,60 @@ class EnderLeafController(object):
             self.switch_state(CameraState.VIDEO)
 
     # MARK: Tools
-    def visualize_noise(self, image_count: int = 5) -> np.ndarray:
-        images = [
-            cv2.medianBlur(self.capture_array()[0], ksize=5)
-            for _ in tqdm(range(image_count))
-        ]
+    def visualize_noise(
+        self, image_count: int = 10, kernel_size: int = 7, focus_method: str = FM_BREN
+    ) -> np.ndarray:
+        images = [self.capture_array()[0] for _ in tqdm(range(image_count))]
+        if kernel_size > 1:
+            images = [cv2.medianBlur(image, ksize=kernel_size) for image in images]
         focus_data = np.array(
             [
-                compute_focus_metric(cv2.cvtColor(image, cv2.COLOR_RGB2GRAY), FM_BREN)
+                compute_focus_metric(
+                    cv2.cvtColor(image, cv2.COLOR_RGB2GRAY), focus_method
+                )
                 for image in tqdm(images)
             ]
         )
         img_min, img_max = (images[focus_data.argmin()], images[focus_data.argmax()])
         return [img_min, img_max, np.abs(img_max - img_min)]
+
+    def test_cycles(
+        self,
+        cycles: list,
+        merge_mode=ImageMergeMode.MIN,
+        switch_state: bool = True,
+        center_on_leaf: bool = True,
+    ):
+        if switch_state is True:
+            self.switch_state(CameraState.STILL)
+        old_cycles = self.acq_light_configurations
+        result = []
+        for i, cycle in enumerate(cycles):
+            self.acq_light_configurations = cycle
+            self.set_lights(self.acq_light_configurations[0], wait=1)
+            images, *_ = self.acquire_leaf_disc(
+                switch_state=False, center_on_leaf=center_on_leaf and i == 0
+            )
+            if i == 0:
+                height, width, _ = images[0].shape
+                circles = get_circles(
+                    images[0], color_space="hsv", channel="s", resize_factor=8
+                )
+                if len(circles["accepted"]) == 1:
+                    _, cx, cy, r = circles["accepted"][0]
+                    crop_data = Rectangle.from_circle((cx, cy, r + 16))
+                else:
+                    crop_data = Rectangle(left=0, top=0, right=width, bottom=height)
+            if len(cycle) > 1:
+                result.append(
+                    merge_images(
+                        image_list=[crop_image(image, crop_data) for image in images],
+                        merge_mode=merge_mode,
+                    )
+                )
+            else:
+                result.append(crop_image(images[0], crop_data))
+        if switch_state is True:
+            self.switch_state(CameraState.VIDEO)
+        self.acq_light_configurations = old_cycles
+        return result

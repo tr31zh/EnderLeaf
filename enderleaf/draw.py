@@ -1,9 +1,17 @@
 import numpy as np
 
-from matplotlib.figure import Figure
+import pandas as pd
 import cv2
 
+from matplotlib.figure import Figure
+from matplotlib.patches import Circle
+import plotly.express as px
+import altair as alt
+import seaborn as sns
+
+
 import albumentations as A
+
 
 def plot_image_to_ax(ax, image, title=None, fontsize=18):
     """Plot image to existing ax and set title
@@ -168,3 +176,58 @@ def concat_tile_resize(
         for im_list_h in im_list_2d
     ]
     return vconcat_resize_min(im_list_v, interpolation=interpolation, width=width)
+
+
+def plot_focus_plotly(df, width: int = 400):
+    fig = px.line(
+        pd.melt(df, id_vars=["z"]),
+        x="z",
+        y="value",
+        color="variable",
+        markers=True,
+        width=width,
+    )
+    fig.update_traces(mode="markers+lines", hovertemplate=None)
+    fig.update_layout(hovermode="x unified")
+    return fig
+
+
+def plot_focus_altair(df, width: int = 200, height=200):
+    df_melted = pd.melt(df, id_vars=["z"])
+    base = alt.Chart(df_melted).encode(x="z")
+    columns = sorted(df_melted.variable.unique())
+    selection = alt.selection_point(
+        fields=["z"], nearest=True, on="mouseover", empty="none", clear="mouseout"
+    )
+
+    lines = base.mark_line().encode(y="value", color="variable")
+    points = lines.mark_circle(size=100)  # .transform_filter(selection)
+
+    rule = (
+        base.transform_pivot("variable", value="value", groupby=["z"])
+        .mark_rule()
+        .encode(
+            opacity=alt.condition(selection, alt.value(0.3), alt.value(0)),
+            tooltip=[alt.Tooltip(c, type="quantitative") for c in columns],
+        )
+        .add_params(selection)
+        .properties(width=width, height=height)
+    )
+
+    return lines + points + rule
+
+
+def plot_focus_plt(df, width: int = 200):
+    df_melted = pd.melt(df, id_vars=["z"])
+    fig = Figure(figsize=(4, 4))
+    ax = fig.subplots(nrows=1, ncols=1)
+    return sns.lineplot(
+        data=df_melted,
+        x="z",
+        y="value",
+        hue="variable",
+        markers=True,
+        dashes=False,
+        ax=ax,
+    )
+    return fig

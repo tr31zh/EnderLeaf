@@ -61,14 +61,14 @@ class Enderlights:
     def __init__(
         self,
         led_data: LedData = LedData(pin=board.D18, led_count=16),
-        default_intensity: int = 255,
+        brightness: float = 1.0,
     ):
         self.led_data = led_data
         if sim_needed is True:
             self.pixels = np.zeros((self.led_data.led_count, 3))
         else:
             self.pixels = NeoPixel(self.led_data.pin, self.led_data.led_count)
-        self.default_intensity = default_intensity
+        self.pixels.brightness = brightness
 
     def __getitem__(self, index):
         return self.pixels[index]
@@ -77,7 +77,7 @@ class Enderlights:
         self.pixels[index] = value
 
     def to_json(self) -> dict:
-        return {k: getattr(self, k) for k in ["enabled", "default_intensity"]}
+        return {k: getattr(self, k) for k in ["enabled", "brightness"]}
 
     def from_json(self, data: dict) -> None:
         for k, v in data.items():
@@ -115,22 +115,19 @@ class Enderlights:
     def set_cardinals(
         self,
         card_points: list,
-        value: tuple | None = None,
+        value: tuple = (255, 255, 255),
     ):
         self.fill((0, 0, 0))
         for card_point in card_points:
-            self.set_cardinal(
-                card_point=card_point,
-                value=(
-                    value
-                    if value is not None
-                    else (
-                        self.default_intensity,
-                        self.default_intensity,
-                        self.default_intensity,
-                    )
-                ),
-            )
+            self.set_cardinal(card_point=card_point, value=value)
+
+    @property
+    def brightness(self):
+        return self.pixels.brightness
+
+    @brightness.setter
+    def brightness(self, value):
+        self.pixels.brightness = value
 
     @property
     def led_count(self):
@@ -186,17 +183,9 @@ class Enderlights:
     def set_slice(self, start: int, end: int, value: tuple):
         self[start:end] = (end - start) * [value]
 
-    def shutter(self, state: bool, value: list | tuple | None = None) -> None:
+    def shutter(self, state: bool, value: list | tuple = (255, 255, 255)) -> None:
         if state is True:
-            self.fill(
-                value
-                if value is not None
-                else (
-                    self.default_intensity,
-                    self.default_intensity,
-                    self.default_intensity,
-                )
-            )
+            self.fill(value)
         else:
             self.fill((0, 0, 0))
 
