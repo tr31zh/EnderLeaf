@@ -1,9 +1,11 @@
+import logging
 from itertools import product
 from pathlib import Path
 from datetime import datetime as dt
 from threading import Thread, Event
 import time
 from typing import Literal
+from functools import wraps
 
 from tqdm import tqdm
 
@@ -55,8 +57,10 @@ from enderleaf.image import (
     merge_images,
     ImageMergeMode,
 )
-from enderleaf.qr_reader import get_qr_data, get_points_extremes
+from enderleaf.qr_reader import get_qr_data, get_points_extremes, check_qr_code
 from enderleaf.draw import draw_circles
+
+logger = logger = logging.getLogger(__name__)
 
 DST_FLD = Path(".").joinpath("output")
 
@@ -106,6 +110,16 @@ def extract_metadata(metadata):
         ]
     } | {"GainRed": metadata["ColourGains"][0], "GainBlue": metadata["ColourGains"][1]}
     return dict(sorted({k: [v] for k, v in data.items()}.items()))
+
+
+
+def log_call(method):
+    @wraps(method)
+    def _impl(self, *method_args, **method_kwargs):
+        logger.info(f"{method.__name__}: {method_args} | {method_kwargs}")
+        return method(self, *method_args, **method_kwargs)
+
+    return _impl
 
 
 class EnderLeafController(object):
@@ -324,6 +338,7 @@ class EnderLeafController(object):
                     raise NotImplementedError(f"Unknown case {self.crop_mode}")
         return image
 
+    @log_call
     def set_crop(self, left, right, top, bottom, crop_mode: CropMode | None = None):
         self.crop_left = left
         self.crop_right = right
@@ -332,6 +347,7 @@ class EnderLeafController(object):
         if crop_mode is not None:
             self.crop_mode = crop_mode
 
+    @log_call
     def set_plate(
         self,
         plate_x,
@@ -407,6 +423,7 @@ class EnderLeafController(object):
             }
         else:
             cam_controls = {"AeEnable": True, "AwbEnable": True}
+        logger.info(f"New controls: {cam_controls}")
         self.set_controls(cam_controls)
 
     def set_top_lights(self, state: bool, card_points: list | None = None):
@@ -446,9 +463,11 @@ class EnderLeafController(object):
     def set_focus_mode(self, focus_mode):
         self.camera.set_controls({"AfMode": focus_mode})
 
+    @log_call
     def set_focus_distance(self, focus_distance):
         self.camera.set_controls({"LensPosition": focus_distance})
 
+    @log_call
     def autofocus_cycle(self):
         self.camera.autofocus_cycle()
         if simulate_camera is True:
@@ -456,16 +475,19 @@ class EnderLeafController(object):
         else:
             self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
 
+    @log_call
     def set_focus_close(self):
         fc_pos = self.camera.camera_controls["LensPosition"][1]
         if self.camera.capture_metadata()["LensPosition"] != fc_pos:
             self.camera.set_controls({"LensPosition": fc_pos})
 
+    @log_call
     def set_focus_far(self):
         ff_pos = self.camera.camera_controls["LensPosition"][0]
         if self.camera.capture_metadata()["LensPosition"] != ff_pos:
             self.camera.set_controls({"LensPosition": ff_pos})
 
+    @log_call
     def capture_array(self):
         match self._camera_state:
             case CameraState.VIDEO:
@@ -500,6 +522,7 @@ class EnderLeafController(object):
             metadata,
         )
 
+    @log_call
     def switch_state(
         self, new_mode: Literal[CameraState.IDLE, CameraState.VIDEO, CameraState.STILL]
     ):
@@ -526,6 +549,7 @@ class EnderLeafController(object):
 
     def start(self):
         if self._camera_state != CameraState.VIDEO:
+            logger.info("Starting video")
             self.stop_event.clear()
             self.camera.configure(self._video_conf)
             self.output = StreamingOutput()
@@ -544,15 +568,19 @@ class EnderLeafController(object):
             time.sleep(0.5)
             if self._camera_state != CameraState.SIMULATION:
                 self._camera_state = CameraState.VIDEO
+            logger.info("Video started")
 
     def stop(self):
         if self._camera_state not in [CameraState.IDLE, CameraState.SIMULATION]:
+            logger.info("Stopping video")
             self.stop_event.set()
             self.thread.join()
             self.camera.stop_recording()
             self.output.close()
             self.camera.stop()
+            logger.info("Video stopped")
             self._camera_state = CameraState.IDLE
+
 
     def check_stage(self):
         return self._stage is not None
@@ -630,6 +658,7 @@ class EnderLeafController(object):
         self.move_position((x, y), index=[position])
         self.capture_array()
 
+    @log_call
     def go_home(self):
         if self.check_stage() is False:
             return
@@ -639,6 +668,7 @@ class EnderLeafController(object):
         self._homed = True
         self.finish_moves()
 
+    @log_call
     def connect_printer(self, port_name):
         for port in list_ports():
             if str(port) == port_name:
@@ -662,22 +692,20 @@ class EnderLeafController(object):
         if image is None:
             image = self.capture_array()[0]
         qr_data = get_qr_data(image)
-        if (
-            qr_data["retval"] is False
-            or len(qr_data["info"]) == 0
-            or len(qr_data["points"]) == 0
-        ):
+        if check_qr_code(qr_data) is False:
             old_brightness = self.top_lights.brightness
             self.top_lights.brightness = 0
             time.sleep(2)
             qr_data = get_qr_data(self.capture_array()[0])
             self.top_lights.brightness = old_brightness
             time.sleep(2)
+        if check_qr_code(qr_data) is False:
+            logger.error("Failed to read QR code")
         return qr_data
 
     def get_qr_pos(self, image):
         qr_data = self.get_qr_data(image)
-        if qr_data["retval"] is False:
+        if check_qr_code(qr_data) is False:
             raise ValueError("Unable to detect QR code")
         min_x, min_y, max_x, max_y = get_points_extremes(points=qr_data["points"][0])
         return (min_x + max_x) // 2, (min_y + max_y) // 2, min_x, min_y, max_x, max_y
@@ -698,6 +726,7 @@ class EnderLeafController(object):
             self.update_positions(self._positions)
         self.call_update_position_plot(index=[0])
 
+    @log_call
     def get_focused_z(self, delta_z=1, switch_state: bool = False) -> float:
         if self.printer_ready() is False:
             return
@@ -765,6 +794,7 @@ class EnderLeafController(object):
             0,
         )
 
+    @log_call
     def center_on_qr_code(
         self, step_val=10, switch_state: bool = False, precise_focusing: bool = True
     ):
@@ -820,6 +850,7 @@ class EnderLeafController(object):
             if switch_state is True:
                 self.switch_state(CameraState.VIDEO)
 
+    @log_call
     def check_corners(self, switch_state: bool = False):
         if self.printer_ready() is False:
             return
@@ -952,6 +983,7 @@ class EnderLeafController(object):
         return images, metadatas, file_paths, df
 
     # MARK: Launch
+    @log_call
     def launch_acquisition(
         self,
         precise_focusing: bool = True,
@@ -1005,6 +1037,7 @@ class EnderLeafController(object):
         self.go_rest()
         self.status = ELStatus.IDLE
 
+    @log_call
     def check_discs_positions(
         self, precise_focusing: bool = False, switch_state: bool = True
     ):

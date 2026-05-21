@@ -1,6 +1,8 @@
 # https://tabler.io/icons
 
-
+import os
+import logging
+import psutil
 from pathlib import Path
 from functools import wraps
 from datetime import datetime as dt
@@ -23,6 +25,68 @@ from enderleaf.image import to_pil, safe_pil_resize
 from enderleaf.enderleaf_ctrl import EnderLeafController
 
 pn.extension("jsoneditor", "ipywidgets")
+
+mkd_log = pn.pane.Markdown(object="", sizing_mode="scale_width", height=300)
+crd_log = pn.layout.Card(mkd_log, title="Log", collapsed=True, height=300)
+
+
+class PanelLogHandler(logging.Handler):
+    def __init__(self, target, card):
+        super().__init__()
+        self.target = target
+        self._logs = []
+
+    def emit(self, record):
+        msg = self.format(record)
+        self._logs.insert(0, msg)
+        if len(self._logs) > 10:
+            self._logs = self._logs[:10]
+        crd_log.title = msg
+        self.target.object = "- " + ("\n\n - ").join(self._logs)
+
+
+class MemoryFilter(logging.Filter):
+
+    last_process_mem = 0
+
+    def filter(self, record):
+        process: psutil.Process = psutil.Process(os.getpid())
+        pmp = process.memory_percent()
+        sign = (
+            "⬆"
+            if pmp > self.last_process_mem
+            else "⬇" if pmp < self.last_process_mem else "="
+        )
+        record.mem_data = f"µ{sign} {pmp:02.2f}%"
+        self.last_process_mem = pmp
+        return True
+
+
+PATH_LOG = Path(__file__).resolve().parent.parent.joinpath("logs")
+
+ensure_folder(PATH_LOG)
+
+log_file_handler = logging.FileHandler(
+    PATH_LOG.joinpath(f"enderleaf_{dt.now().strftime('%Y_%m_%d')}.log"),
+    mode="a",
+    delay=True,
+)
+log_file_handler.addFilter(MemoryFilter())
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s - %(mem_data)s - %(name)s - %(levelname)s] - %(message)s",
+    handlers=[
+        log_file_handler,
+        PanelLogHandler(target=mkd_log, card=crd_log),
+    ],
+)
+
+logger = logger = logging.getLogger(__name__)
+logger.info("")
+logger.info("==== Starting session ====")
+logger.info(pn.state.session_info)
+logger.info("")
 
 SIDE_BAR_WIDTH = 300
 LO_PRECISE_FOCUS = "Precise focus"
@@ -524,6 +588,7 @@ def ui_main():
             active=[0],
             sizing_mode="stretch_height",
         ),
+        crd_log,
     )
 
 

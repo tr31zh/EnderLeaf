@@ -69,6 +69,7 @@ def get_qr_data(
         "points": np.asarray(point_data),
     }
 
+
 def get_qr_viz(
     image_object: Path | str | np.ndarray, safe_pad=100, sharpen_image: bool = False
 ):
@@ -87,3 +88,11 @@ def get_qr_viz(
         for info, qr_points in zip(data["info"], data["points"]):
             image = draw_qr_data(image=image, points=qr_points, info=info)
     return image
+
+
+def check_qr_code(qr_data):
+    return (
+        qr_data["retval"] is True
+        and len(qr_data["info"]) > 0
+        and len(qr_data["points"]) > 0
+    )
