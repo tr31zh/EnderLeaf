@@ -2,7 +2,6 @@ from itertools import product
 from pathlib import Path
 from datetime import datetime as dt
 from threading import Thread, Event
-from enum import Enum
 import time
 from typing import Literal
 
@@ -24,8 +23,6 @@ except:
 else:
     simulate_camera = False
 
-from enderleaf.streaming import StreamingOutput
-from enderleaf.focus_metrics import compute_focus_metric, FM_METHODS, FM_LAPV, FM_BREN
 from enderscope.scan_patterns import (
     snake,
     get_extremes,
@@ -34,13 +31,21 @@ from enderscope.scan_patterns import (
 )
 from enderscope.bed import bed
 from enderscope.serial import list_ports, default_printer_port, Stage
-from enderscope.enderlights_pi import (
-    Enderlights,
-    default_leds,
+from enderscope.enderlights_pi import Enderlights, default_leds
+
+from enderleaf.const import (
+    CropMode,
+    CameraState,
+    ELStatus,
     CardPoint,
     LIGHTS_CYCLE,
     LEN_LIGHTS_CYCLE,
+    FM_METHODS,
+    FM_LAPV,
+    FM_BREN,
 )
+from enderleaf.streaming import StreamingOutput
+from enderleaf.focus_metrics import compute_focus_metric
 from enderleaf.tools import ensure_folder, format_datetime, write_dataframe, time_method
 from enderleaf.image import (
     crop_image,
@@ -54,25 +59,6 @@ from enderleaf.qr_reader import get_qr_data, get_points_extremes
 from enderleaf.draw import draw_circles
 
 DST_FLD = Path(".").joinpath("output")
-
-
-class CropMode(Enum):
-    CROP = "Cropped image"
-    LINES = "Crop lines"
-    IGNORE = "Ignore"
-
-
-class CameraState(Enum):
-    IDLE = "idle"
-    VIDEO = "video"
-    STILL = "still"
-    SIMULATION = "simulation"
-
-
-class ELStatus(Enum):
-    IDLE = "Idle"
-    JOB_IN_PROGRESS = "Job in progress"
-    STOP_REQUESTED = "Stop requested"
 
 
 def expand_file_path(file_path: Path, use_file_ts: bool = False):
@@ -374,7 +360,11 @@ class EnderLeafController(object):
                 "AnalogueGain": 1,
                 "AwbEnable": False,
                 "ColourGains": (2.4, 0.83),
-                "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.HighQuality,
+                "NoiseReductionMode": (
+                    -1
+                    if simulate_camera is True
+                    else controls.draft.NoiseReductionModeEnum.HighQuality
+                ),
             }
         elif avg_lights == 191.25:
             cam_controls = {
@@ -383,7 +373,11 @@ class EnderLeafController(object):
                 "AnalogueGain": 1,
                 "AwbEnable": False,
                 "ColourGains": (2.4, 0.83),
-                "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.HighQuality,
+                "NoiseReductionMode": (
+                    -1
+                    if simulate_camera is True
+                    else controls.draft.NoiseReductionModeEnum.HighQuality
+                ),
             }
         elif avg_lights == 127.5:
             cam_controls = {
@@ -392,7 +386,11 @@ class EnderLeafController(object):
                 "AnalogueGain": 1,
                 "AwbEnable": False,
                 "ColourGains": (2.4, 0.83),
-                "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.HighQuality,
+                "NoiseReductionMode": (
+                    -1
+                    if simulate_camera is True
+                    else controls.draft.NoiseReductionModeEnum.HighQuality
+                ),
             }
         elif avg_lights == 63.75:
             cam_controls = {
@@ -401,7 +399,11 @@ class EnderLeafController(object):
                 "AnalogueGain": 1,
                 "AwbEnable": False,
                 "ColourGains": (2.4, 0.83),
-                "NoiseReductionMode": controls.draft.NoiseReductionModeEnum.HighQuality,
+                "NoiseReductionMode": (
+                    -1
+                    if simulate_camera is True
+                    else controls.draft.NoiseReductionModeEnum.HighQuality
+                ),
             }
         else:
             cam_controls = {"AeEnable": True, "AwbEnable": True}
@@ -501,7 +503,10 @@ class EnderLeafController(object):
     def switch_state(
         self, new_mode: Literal[CameraState.IDLE, CameraState.VIDEO, CameraState.STILL]
     ):
-        if new_mode == self._camera_state:
+        if (
+            new_mode == self._camera_state
+            or self._camera_state == CameraState.SIMULATION
+        ):
             return
         match new_mode:
             case CameraState.IDLE:

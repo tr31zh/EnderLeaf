@@ -18,32 +18,7 @@ except:
 
     import numpy as np
 
-
-class CardPoint(Enum):
-    NORTH = "NORTH"
-    EAST = "EAST"
-    SOUTH = "SOUTH"
-    WEST = "WEST"
-
-
-LIGHTS_CYCLE = [
-    [],
-    [CardPoint.EAST, CardPoint.NORTH, CardPoint.WEST, CardPoint.SOUTH],
-    [CardPoint.NORTH],
-    [CardPoint.WEST],
-    [CardPoint.SOUTH],
-    [CardPoint.EAST],
-    [CardPoint.NORTH, CardPoint.WEST],
-    [CardPoint.WEST, CardPoint.SOUTH],
-    [CardPoint.SOUTH, CardPoint.EAST],
-    [CardPoint.EAST, CardPoint.NORTH],
-    [CardPoint.NORTH, CardPoint.WEST, CardPoint.SOUTH],
-    [CardPoint.EAST, CardPoint.WEST, CardPoint.SOUTH],
-    [CardPoint.EAST, CardPoint.NORTH, CardPoint.SOUTH],
-    [CardPoint.EAST, CardPoint.NORTH, CardPoint.WEST],
-]
-LEN_LIGHTS_CYCLE = len(LIGHTS_CYCLE)
-
+from enderleaf.const import CardPoint
 
 @dataclass
 class LedData:
@@ -66,9 +41,10 @@ class Enderlights:
         self.led_data = led_data
         if sim_needed is True:
             self.pixels = np.zeros((self.led_data.led_count, 3))
+            self._brightness = brightness
         else:
             self.pixels = NeoPixel(self.led_data.pin, self.led_data.led_count)
-        self.pixels.brightness = brightness
+            self.pixels.brightness = brightness
 
     def __getitem__(self, index):
         return self.pixels[index]
@@ -123,11 +99,14 @@ class Enderlights:
 
     @property
     def brightness(self):
-        return self.pixels.brightness
+        return self._brightness if sim_needed else self.pixels.brightness
 
     @brightness.setter
     def brightness(self, value):
-        self.pixels.brightness = value
+        if sim_needed:
+            self.brightness = value
+        else:
+            self.pixels.brightness = value
 
     @property
     def led_count(self):

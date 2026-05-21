@@ -13,37 +13,6 @@ import cv2
 from scipy.ndimage import convolve
 from skimage.filters import sobel_h, sobel_v
 
-FM_BREN = "BREN"
-FM_FFTE = "FFTE"
-FM_GLVA = "GLVA"
-FM_GLVN = "GLVN"
-FM_GRAE = "GRAE"
-FM_GRAT = "GRAT"
-FM_GRAS = "GRAS"
-FM_LAPE = "LAPE"
-FM_LAPM = "LAPM"
-FM_LAPM = "LAPM"
-FM_LAPV = "LAPV"
-FM_LAPD = "LAPD"
-FM_SFRQ = "SFRQ"
-FM_TENG = "TENG"
-FM_TENV = "TENV"
-FM_VOLA = "VOLA"
-FM_METHODS = [
-    FM_BREN,
-    # FM_FFTE,
-    # FM_GLVA,
-    # FM_GLVN,
-    # FM_GRAE,
-    FM_GRAS,
-    FM_GRAT,
-    FM_LAPD,
-    FM_LAPE,
-    FM_LAPM,
-    FM_LAPV,
-    FM_SFRQ,
-]
-
 
 def BREN(image):
     """Brenner's focus measure

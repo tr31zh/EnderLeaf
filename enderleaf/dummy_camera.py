@@ -77,7 +77,7 @@ class Picamera2(io.BufferedIOBase):
         self.color_index = 0
         self.prod_thread = None
         self.stop_event = Event()
-        self.camera_controls = {}
+        self.camera_controls = {"LensPosition": (0, 15, 1)}
 
     def write(self, data: bytes) -> int:
         """Producer calls this. Blocks if buffer is full."""
@@ -181,7 +181,7 @@ class Picamera2(io.BufferedIOBase):
         return image
 
     def capture_metadata(self):
-        return {}
+        return {"LensPosition": 15}
 
     def stop(self):
         pass

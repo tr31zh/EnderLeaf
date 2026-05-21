@@ -12,13 +12,7 @@ from skimage import color
 from skimage.transform import hough_circle, hough_circle_peaks
 from skimage.feature import SIFT, match_descriptors
 
-
-class ImageMergeMode(Enum):
-    MIN = "min"
-    MAX = "max"
-    AVG = "avg"
-    MEDIAN = "median"
-
+from enderleaf.const import ImageMergeMode
 
 @dataclass
 class Rectangle:

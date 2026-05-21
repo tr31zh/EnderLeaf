@@ -1,3 +1,6 @@
+from enum import Enum
+
+
 # MARK: Colors
 C_BLACK = (0, 0, 0)
 C_BLUE = (255, 0, 0)
@@ -56,3 +59,91 @@ COLOR_SPACES = {
     "yiq": ["y", "i", "q"],
     "lab": ["l", "a", "b"],
 }
+
+# MARK: Enums
+class FocusMode(Enum):
+    MANUAL = "MANUAL"
+    HUNT = "HUNT"
+    AUTO = "AUTO"
+
+class CropMode(Enum):
+    CROP = "Cropped image"
+    LINES = "Crop lines"
+    IGNORE = "Ignore"
+
+
+class CameraState(Enum):
+    IDLE = "idle"
+    VIDEO = "video"
+    STILL = "still"
+    SIMULATION = "simulation"
+
+
+class ELStatus(Enum):
+    IDLE = "Idle"
+    JOB_IN_PROGRESS = "Job in progress"
+    STOP_REQUESTED = "Stop requested"
+
+class ImageMergeMode(Enum):
+    MIN = "min"
+    MAX = "max"
+    AVG = "avg"
+    MEDIAN = "median"
+
+class CardPoint(Enum):
+    NORTH = "NORTH"
+    EAST = "EAST"
+    SOUTH = "SOUTH"
+    WEST = "WEST"
+
+
+# MARK: Light cycles
+LIGHTS_CYCLE = [
+    [],
+    [CardPoint.EAST, CardPoint.NORTH, CardPoint.WEST, CardPoint.SOUTH],
+    [CardPoint.NORTH],
+    [CardPoint.WEST],
+    [CardPoint.SOUTH],
+    [CardPoint.EAST],
+    [CardPoint.NORTH, CardPoint.WEST],
+    [CardPoint.WEST, CardPoint.SOUTH],
+    [CardPoint.SOUTH, CardPoint.EAST],
+    [CardPoint.EAST, CardPoint.NORTH],
+    [CardPoint.NORTH, CardPoint.WEST, CardPoint.SOUTH],
+    [CardPoint.EAST, CardPoint.WEST, CardPoint.SOUTH],
+    [CardPoint.EAST, CardPoint.NORTH, CardPoint.SOUTH],
+    [CardPoint.EAST, CardPoint.NORTH, CardPoint.WEST],
+]
+LEN_LIGHTS_CYCLE = len(LIGHTS_CYCLE)
+
+# MARK: Focus methods
+FM_BREN = "BREN"
+FM_FFTE = "FFTE"
+FM_GLVA = "GLVA"
+FM_GLVN = "GLVN"
+FM_GRAE = "GRAE"
+FM_GRAT = "GRAT"
+FM_GRAS = "GRAS"
+FM_LAPE = "LAPE"
+FM_LAPM = "LAPM"
+FM_LAPM = "LAPM"
+FM_LAPV = "LAPV"
+FM_LAPD = "LAPD"
+FM_SFRQ = "SFRQ"
+FM_TENG = "TENG"
+FM_TENV = "TENV"
+FM_VOLA = "VOLA"
+FM_METHODS = [
+    FM_BREN,
+    # FM_FFTE,
+    # FM_GLVA,
+    # FM_GLVN,
+    # FM_GRAE,
+    FM_GRAS,
+    FM_GRAT,
+    FM_LAPD,
+    FM_LAPE,
+    FM_LAPM,
+    FM_LAPV,
+    FM_SFRQ,
+]
