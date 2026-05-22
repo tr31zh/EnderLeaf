@@ -48,6 +48,10 @@ from enderleaf.const import (
     FM_BREN,
     LightsCycle,
     LogKind,
+    PRECISE_TIME_FORMAT,
+    DEFAULT_DATETIME_FORMAT,
+    DEFAULT_DATE_FORMAT,
+    DEFAULT_TIME_FORMAT,
 )
 from enderleaf.streaming import StreamingOutput
 from enderleaf.focus_metrics import compute_focus_metric
@@ -67,33 +71,6 @@ from enderleaf.draw import draw_circles
 logger = logger = logging.getLogger(__name__)
 
 DST_FLD = Path(".").joinpath("output")
-
-
-def expand_file_path(file_path: Path, use_file_ts: bool = False):
-    file_name = file_path.with_suffix("").name.replace("_", "#")
-    file_parts = file_name.split("#")
-    current_file_ts = pd.to_datetime(
-        dt.fromtimestamp(round(file_path.stat().st_ctime))
-        if use_file_ts is True
-        else file_parts[-1]
-    )
-    return {
-        "exp": [file_parts[0]],
-        "inoc": [file_parts[1].replace("I", "")],
-        "plate": [file_parts[2].replace("P", "")],
-        "row": [file_parts[3]],
-        "col": [file_parts[4]],
-        "date_time": [current_file_ts],
-        "file_name": [file_path.name],
-        "date": [current_file_ts.date()],
-        "year": [current_file_ts.year],
-        "month": [current_file_ts.month],
-        "day": [current_file_ts.day],
-        "time": [current_file_ts.time()],
-        "hour": [current_file_ts.hour],
-        "minute": [current_file_ts.minute],
-        "second": [current_file_ts.second],
-    }
 
 
 def extract_metadata(metadata):
@@ -932,7 +909,7 @@ class EnderLeafController(object):
             self.log(
                 LogKind.INFO, f"Detected plate {plate} in experiemnt {exp}, inoc {inoc}"
             )
-        return exp_name, exp, inoc, plate, z
+        return exp, inoc, plate, z
 
     def parse_positions(self):
         return [
@@ -968,6 +945,8 @@ class EnderLeafController(object):
         switch_state: bool = False,
         center_on_leaf: bool = False,
         exp_name: str | None = None,
+        inoc: str | None = None,
+        plate: str | None = None,
         r: str | None = None,
         c: int | None = None,
         start_ts: str | None = None,
@@ -998,29 +977,51 @@ class EnderLeafController(object):
             if exp_name is None:
                 metadatas.append(metadata)
                 continue
+            now = dt.now()
+            now_str = format_datetime(t=now, time_format=PRECISE_TIME_FORMAT)
+            card_str = ""
+            if CardPoint.NORTH in light_conf:
+                card_str += "n"
+            if CardPoint.EAST in light_conf:
+                card_str += "e"
+            if CardPoint.SOUTH in light_conf:
+                card_str += "s"
+            if CardPoint.WEST in light_conf:
+                card_str += "w"
             file_path = dst_folder.joinpath(
-                f"{exp_name}#{r}#{c}#{format_datetime()}"
+                f"{exp_name}#{r}#{c}#{card_str}#{now_str}"
             ).with_suffix(".png")
             file_paths.append(file_path)
-            metadata = (
-                expand_file_path(file_path)
-                | {
-                    "job_ts": [start_ts],
-                    "cycle_id": [cycle_id],
-                    "north": [CardPoint.NORTH in light_conf],
-                    "east": [CardPoint.EAST in light_conf],
-                    "south": [CardPoint.SOUTH in light_conf],
-                    "west": [CardPoint.WEST in light_conf],
-                    "center_on_leaf": [center_on_leaf],
-                    "height": [z],
-                    "crop_top": [self.crop_top],
-                    "crop_bottom": [self.crop_bottom],
-                    "crop_left": [self.crop_left],
-                    "crop_right": [self.crop_right],
-                    "brightness": [self.top_lights.brightness],
-                }
-                | extract_metadata(metadata=metadata)
-            )
+            metadata = {
+                "exp": [exp_name],
+                "inoc": [inoc],
+                "plate": [plate],
+                "row": [r],
+                "col": [c],
+                "date_time": [now_str],
+                "file_name": [file_path.name],
+                "date": [now.date()],
+                "year": [now.year],
+                "month": [now.month],
+                "day": [now.day],
+                "time": [now.time()],
+                "hour": [now.hour],
+                "minute": [now.minute],
+                "second": [now.second + (now.microsecond // 1000) / 1000],
+                "job_ts": [start_ts],
+                "cycle_id": [cycle_id],
+                "north": [CardPoint.NORTH in light_conf],
+                "east": [CardPoint.EAST in light_conf],
+                "south": [CardPoint.SOUTH in light_conf],
+                "west": [CardPoint.WEST in light_conf],
+                "center_on_leaf": [center_on_leaf],
+                "height": [z],
+                "crop_top": [self.crop_top],
+                "crop_bottom": [self.crop_bottom],
+                "crop_left": [self.crop_left],
+                "crop_right": [self.crop_right],
+                "brightness": [self.top_lights.brightness],
+            } | extract_metadata(metadata=metadata)
             metadatas.append(metadata)
             df = pd.concat([df, pd.DataFrame(metadata)])
         if switch_state is True:
@@ -1040,7 +1041,7 @@ class EnderLeafController(object):
         self.indent += 4
         self.set_focus_close()
         self.status = ELStatus.JOB_IN_PROGRESS
-        exp_name, exp, inoc, plate, z = self.init_job(
+        exp, inoc, plate, z = self.init_job(
             precise_focusing=precise_focusing, switch_state=switch_state
         )
         df = pd.DataFrame()
@@ -1059,7 +1060,9 @@ class EnderLeafController(object):
         for idx, p, c, r in job_list:
             self.move_position(np.append(p, z), index=idx)
             images, _, file_paths, df_cycle = self.acquire_leaf_disc(
-                exp_name=exp_name,
+                exp_name=exp,
+                inoc=inoc,
+                plate=plate,
                 r=r,
                 c=c,
                 start_ts=start_ts,

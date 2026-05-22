@@ -126,6 +126,10 @@ def get_channels(image, color_space):
         ]
     elif color_space.lower() == "lab":
         return cv2.split(cv2.cvtColor(image, cv2.COLOR_BGR2LAB))
+    elif color_space.lower() == "yuv":
+        return cv2.split(cv2.cvtColor(image, cv2.COLOR_BGR2YUV))
+    elif color_space.lower() == "ycrcb":
+        return cv2.split(cv2.cvtColor(image, cv2.COLOR_BGR2YCrCb))
     else:
         raise NotImplementedError(f"Unknown color space {color_space}")
 
@@ -147,13 +151,30 @@ def get_channel(image: np.ndarray, color_space: str, channel: str) -> np.ndarray
     channels = get_channels(image=image, color_space=color_space)
     if channel.lower() in ["red", "h", "y", "l"]:
         return channels[0]
-    if channel.lower() in ["green", "s", "i", "a"]:
+    if channel.lower() in ["green", "s", "i", "a", "u", "cr"]:
         return channels[1]
-    if channel.lower() in ["blue", "v", "q", "b"]:
+    if channel.lower() in ["blue", "v", "q", "b", "cb"]:
         return channels[2]
     else:
         raise NotImplementedError(
             f"Unknown combination color space {color_space}, channel {channel}"
+        )
+
+
+def equalize_hist(image, color_space):
+    assert color_space in ["hsv", "lab", "yuv", "ycrcb"]
+    if color_space == "hsv":
+        h, s, v = get_channels(image=image, color_space=color_space)
+        return cv2.cvtColor(cv2.merge([h, s, cv2.equalizeHist(v)]), cv2.COLOR_HSV2BGR)
+    else:
+        l, c1, c2 = get_channels(image=image, color_space=color_space)
+        return cv2.cvtColor(
+            cv2.merge([cv2.equalizeHist(l), c1, c2]),
+            (
+                cv2.COLOR_LAB2BGR
+                if color_space == "lab"
+                else cv2.COLOR_YUV2BGR if color_space == "yuv" else cv2.COLOR_YCrCb2BGR
+            ),
         )
 
 

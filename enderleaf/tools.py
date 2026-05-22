@@ -4,8 +4,7 @@ from datetime import datetime as dt
 
 import pandas as pd
 
-
-TIME_FORMAT = "%Y%m%d%H%M%S"
+from enderleaf.const import TIME_FORMAT
 
 
 def format_time(seconds):
@@ -43,10 +42,8 @@ def time_method(f):
     return new_function
 
 
-def format_datetime(t=None):
-    return (
-        dt.now().strftime(TIME_FORMAT) if t is None else t.strftime(TIME_FORMAT)
-    )
+def format_datetime(t=None, time_format=TIME_FORMAT):
+    return dt.now().strftime(time_format) if t is None else t.strftime(time_format)
 
 
 def ensure_folder(forced_path: Path, return_string: bool = False) -> str | Path:

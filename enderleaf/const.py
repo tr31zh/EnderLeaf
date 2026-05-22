@@ -59,6 +59,11 @@ COLOR_SPACES = {
     "lab": ["l", "a", "b"],
 }
 
+TIME_FORMAT = "%Y%m%d%H%M%S"
+PRECISE_TIME_FORMAT = "%Y%m%d%H%M%S%f"
+DEFAULT_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+DEFAULT_DATE_FORMAT = "%Y-%m-%d"
+DEFAULT_TIME_FORMAT = "%H:%M:%S"
 
 # MARK: Enums
 class FocusMode(Enum):
