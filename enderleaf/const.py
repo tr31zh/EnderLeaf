@@ -1,6 +1,5 @@
 from enum import Enum
 
-
 # MARK: Colors
 C_BLACK = (0, 0, 0)
 C_BLUE = (255, 0, 0)
@@ -60,11 +59,13 @@ COLOR_SPACES = {
     "lab": ["l", "a", "b"],
 }
 
+
 # MARK: Enums
 class FocusMode(Enum):
     MANUAL = "MANUAL"
     HUNT = "HUNT"
     AUTO = "AUTO"
+
 
 class CropMode(Enum):
     CROP = "Cropped image"
@@ -84,11 +85,13 @@ class ELStatus(Enum):
     JOB_IN_PROGRESS = "Job in progress"
     STOP_REQUESTED = "Stop requested"
 
+
 class ImageMergeMode(Enum):
     MIN = "min"
     MAX = "max"
     AVG = "avg"
     MEDIAN = "median"
+
 
 class CardPoint(Enum):
     NORTH = "NORTH"
@@ -96,9 +99,15 @@ class CardPoint(Enum):
     SOUTH = "SOUTH"
     WEST = "WEST"
 
+class LogKind(Enum):
+    INFO= "info"
+    WARNING= "warning"
+    EXCEPTION= "exception"
+    ERROR = "error"
+    CRITICAL = "critical"
 
 # MARK: Light cycles
-LIGHTS_CYCLE = [
+LIGHTS_CONF = [
     [],
     [CardPoint.EAST, CardPoint.NORTH, CardPoint.WEST, CardPoint.SOUTH],
     [CardPoint.NORTH],
@@ -114,7 +123,15 @@ LIGHTS_CYCLE = [
     [CardPoint.EAST, CardPoint.NORTH, CardPoint.SOUTH],
     [CardPoint.EAST, CardPoint.NORTH, CardPoint.WEST],
 ]
-LEN_LIGHTS_CYCLE = len(LIGHTS_CYCLE)
+LEN_LIGHTS_CONF = len(LIGHTS_CONF)
+
+class LightsCycle(Enum):
+    OFF = [LIGHTS_CONF[0]]
+    FULL = [LIGHTS_CONF[1]]
+    ONE_FOURTH = [LIGHTS_CONF[2], LIGHTS_CONF[3], LIGHTS_CONF[4], LIGHTS_CONF[5]]
+    TWO_FOURTHS = [LIGHTS_CONF[6], LIGHTS_CONF[7], LIGHTS_CONF[8], LIGHTS_CONF[9]]
+    THREE_FOURTHS = [LIGHTS_CONF[10], LIGHTS_CONF[11], LIGHTS_CONF[12], LIGHTS_CONF[13]]
+
 
 # MARK: Focus methods
 FM_BREN = "BREN"

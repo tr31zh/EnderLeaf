@@ -6,6 +6,7 @@ from threading import Thread, Event
 import time
 from typing import Literal
 from functools import wraps
+from timeit import default_timer as timer
 
 from tqdm import tqdm
 
@@ -40,21 +41,24 @@ from enderleaf.const import (
     CameraState,
     ELStatus,
     CardPoint,
-    LIGHTS_CYCLE,
-    LEN_LIGHTS_CYCLE,
+    LIGHTS_CONF,
+    LEN_LIGHTS_CONF,
     FM_METHODS,
     FM_LAPV,
     FM_BREN,
+    LightsCycle,
+    LogKind,
 )
 from enderleaf.streaming import StreamingOutput
 from enderleaf.focus_metrics import compute_focus_metric
-from enderleaf.tools import ensure_folder, format_datetime, write_dataframe, time_method
+from enderleaf.tools import ensure_folder, format_datetime, write_dataframe, format_time
 from enderleaf.image import (
     crop_image,
     Rectangle,
     get_circles,
     get_channel,
     merge_images,
+    merge_images_channels,
     ImageMergeMode,
 )
 from enderleaf.qr_reader import get_qr_data, get_points_extremes, check_qr_code
@@ -112,12 +116,31 @@ def extract_metadata(metadata):
     return dict(sorted({k: [v] for k, v in data.items()}.items()))
 
 
-
 def log_call(method):
     @wraps(method)
     def _impl(self, *method_args, **method_kwargs):
-        logger.info(f"{method.__name__}: {method_args} | {method_kwargs}")
+        self.log(
+            LogKind.INFO, f"Called {method.__name__}: {method_args} | {method_kwargs}"
+        )
         return method(self, *method_args, **method_kwargs)
+
+    return _impl
+
+
+def log_time_call(method):
+    @wraps(method)
+    def _impl(self, *method_args, **method_kwargs):
+        self.log(
+            LogKind.INFO,
+            f"-> STARTED -> {method.__name__}({method_args} | {method_kwargs})",
+        )
+        before = timer()
+        result = method(self, *method_args, **method_kwargs)
+        self.log(
+            LogKind.INFO,
+            f"-> ENDED -> {method.__name__} in {format_time(timer() - before)}",
+        )
+        return result
 
     return _impl
 
@@ -153,7 +176,7 @@ class EnderLeafController(object):
         self.best_focus_method = FM_BREN
 
         self.top_lights = Enderlights(default_leds["groov_led"], brightness=1)
-        self.acq_light_configurations = [LIGHTS_CYCLE[1]]
+        self.lights_cycle = LightsCycle.ONE_FOURTH
 
         self._positions = []
         self._old_crop_values = -1, -1, -1, -1
@@ -163,6 +186,7 @@ class EnderLeafController(object):
         self._bad_discs = []
         self._ligths_cycle_index = 0
         self._px_to_mm = -1
+        self.indent = 0
         self.status = ELStatus.IDLE
 
         # Callbacks
@@ -186,6 +210,22 @@ class EnderLeafController(object):
         self.focus_start_z = 36
         self.focus_delta_z = 10
         self.top_lights.brightness = 1.0
+
+    def log(self, kind, message: str):
+        indent = "".join([" " for _ in range(self.indent)])
+        match kind:
+            case LogKind.INFO:
+                logger.info(indent + message)
+            case LogKind.WARNING:
+                logger.warning(indent + message)
+            case LogKind.EXCEPTION:
+                logger.exception(indent + message)
+            case LogKind.ERROR:
+                logger.error(indent + message)
+            case LogKind.CRITICAL:
+                logger.critical(indent + message)
+            case _:
+                raise NotImplementedError(f"Unknown log kind '{kind}'")
 
     def to_json(self) -> dict:
         return {
@@ -423,7 +463,7 @@ class EnderLeafController(object):
             }
         else:
             cam_controls = {"AeEnable": True, "AwbEnable": True}
-        logger.info(f"New controls: {cam_controls}")
+        self.log(LogKind.INFO, f"New controls: {cam_controls}")
         self.set_controls(cam_controls)
 
     def set_top_lights(self, state: bool, card_points: list | None = None):
@@ -446,11 +486,11 @@ class EnderLeafController(object):
         time.sleep(wait)
 
     def cycle_lights(self, wait=1):
-        if self._ligths_cycle_index >= LEN_LIGHTS_CYCLE - 1:
+        if self._ligths_cycle_index >= LEN_LIGHTS_CONF - 1:
             self._ligths_cycle_index = 0
         else:
             self._ligths_cycle_index += 1
-        self.set_lights(LIGHTS_CYCLE[self._ligths_cycle_index], wait=wait)
+        self.set_lights(LIGHTS_CONF[self._ligths_cycle_index], wait=wait)
 
     def set_top_lights_brightness(self, brightness):
         self.top_lights.brightness = brightness
@@ -487,7 +527,6 @@ class EnderLeafController(object):
         if self.camera.capture_metadata()["LensPosition"] != ff_pos:
             self.camera.set_controls({"LensPosition": ff_pos})
 
-    @log_call
     def capture_array(self):
         match self._camera_state:
             case CameraState.VIDEO:
@@ -547,9 +586,10 @@ class EnderLeafController(object):
                 raise NotImplementedError(f"Unknown case {new_mode}")
         self._camera_state = new_mode
 
+    @log_time_call
     def start(self):
+        self.indent += 4
         if self._camera_state != CameraState.VIDEO:
-            logger.info("Starting video")
             self.stop_event.clear()
             self.camera.configure(self._video_conf)
             self.output = StreamingOutput()
@@ -568,19 +608,17 @@ class EnderLeafController(object):
             time.sleep(0.5)
             if self._camera_state != CameraState.SIMULATION:
                 self._camera_state = CameraState.VIDEO
-            logger.info("Video started")
+        self.indent -= 4
 
+    @log_time_call
     def stop(self):
         if self._camera_state not in [CameraState.IDLE, CameraState.SIMULATION]:
-            logger.info("Stopping video")
             self.stop_event.set()
             self.thread.join()
             self.camera.stop_recording()
             self.output.close()
             self.camera.stop()
-            logger.info("Video stopped")
             self._camera_state = CameraState.IDLE
-
 
     def check_stage(self):
         return self._stage is not None
@@ -668,7 +706,7 @@ class EnderLeafController(object):
         self._homed = True
         self.finish_moves()
 
-    @log_call
+    @log_time_call
     def connect_printer(self, port_name):
         for port in list_ports():
             if str(port) == port_name:
@@ -700,7 +738,7 @@ class EnderLeafController(object):
             self.top_lights.brightness = old_brightness
             time.sleep(2)
         if check_qr_code(qr_data) is False:
-            logger.error("Failed to read QR code")
+            self.log(LogKind.ERROR, "Failed to read QR code")
         return qr_data
 
     def get_qr_pos(self, image):
@@ -886,6 +924,14 @@ class EnderLeafController(object):
         except:
             exp_name = "ExpXXDMXX#IX#PXX"
             exp, inoc, plate = exp_name.split("#")
+            self.log(
+                LogKind.EXCEPTION,
+                f"Failed to detect QR code switching to default plate {plate} in experiemnt {exp}, inoc {inoc}",
+            )
+        else:
+            self.log(
+                LogKind.INFO, f"Detected plate {plate} in experiemnt {exp}, inoc {inoc}"
+            )
         return exp_name, exp, inoc, plate, z
 
     def parse_positions(self):
@@ -916,6 +962,7 @@ class EnderLeafController(object):
         ]
 
     # @time_method
+    @log_call
     def acquire_leaf_disc(
         self,
         switch_state: bool = False,
@@ -929,9 +976,7 @@ class EnderLeafController(object):
     ):
         if switch_state is True:
             self.switch_state(CameraState.STILL)
-        cycle_id = (
-            int(format_datetime()) if len(self.acq_light_configurations) > 1 else None
-        )
+        cycle_id = int(format_datetime()) if len(self.lights_cycle.value) > 1 else None
         file_paths = []
         images = []
         metadatas = []
@@ -943,8 +988,8 @@ class EnderLeafController(object):
             if len(circles["accepted"]) == 1:
                 _, ccx, ccy, _r = circles["accepted"][0]
                 self.center_on_target(cx, cy, ccx, ccy)
-        for light_conf in self.acq_light_configurations:
-            if len(self.acq_light_configurations) > 1:
+        for light_conf in self.lights_cycle.value:
+            if len(self.lights_cycle.value) > 1:
                 self.set_lights(light_conf, wait=0.2)
             else:
                 time.sleep(0.2)
@@ -983,7 +1028,7 @@ class EnderLeafController(object):
         return images, metadatas, file_paths, df
 
     # MARK: Launch
-    @log_call
+    @log_time_call
     def launch_acquisition(
         self,
         precise_focusing: bool = True,
@@ -992,6 +1037,7 @@ class EnderLeafController(object):
     ):
         if self.printer_ready() is False:
             return
+        self.indent += 4
         self.set_focus_close()
         self.status = ELStatus.JOB_IN_PROGRESS
         exp_name, exp, inoc, plate, z = self.init_job(
@@ -1007,7 +1053,7 @@ class EnderLeafController(object):
         data_file_name = fld_data.joinpath(
             exp + "#I" + str(inoc) + "#P" + str(plate) + "#" + start_ts
         ).with_suffix(".csv")
-        self.set_lights(self.acq_light_configurations[0])
+        self.set_lights(self.lights_cycle.value[0])
         job_list = self.parse_positions()
         len_job_list = len(job_list)
         for idx, p, c, r in job_list:
@@ -1034,9 +1080,11 @@ class EnderLeafController(object):
         if switch_state is True:
             self.switch_state(CameraState.VIDEO)
 
+        self.indent -= 4
         self.go_rest()
         self.status = ELStatus.IDLE
 
+    # MARK: Tools
     @log_call
     def check_discs_positions(
         self, precise_focusing: bool = False, switch_state: bool = True
@@ -1082,7 +1130,6 @@ class EnderLeafController(object):
         if switch_state is True:
             self.switch_state(CameraState.VIDEO)
 
-    # MARK: Tools
     def visualize_noise(
         self, image_count: int = 10, kernel_size: int = 7, focus_method: str = FM_BREN
     ) -> np.ndarray:
@@ -1102,18 +1149,18 @@ class EnderLeafController(object):
 
     def test_cycles(
         self,
-        cycles: list,
+        cycles=LightsCycle.ONE_FOURTH,
         merge_mode=ImageMergeMode.MIN,
         switch_state: bool = True,
         center_on_leaf: bool = True,
     ):
         if switch_state is True:
             self.switch_state(CameraState.STILL)
-        old_cycles = self.acq_light_configurations
+        old_cycles = self.lights_cycle
         result = []
         for i, cycle in enumerate(cycles):
-            self.acq_light_configurations = cycle
-            self.set_lights(self.acq_light_configurations[0], wait=1)
+            self.lights_cycle = cycle
+            self.set_lights(self.lights_cycle.value[0], wait=1)
             images, *_ = self.acquire_leaf_disc(
                 switch_state=False, center_on_leaf=center_on_leaf and i == 0
             )
@@ -1127,16 +1174,32 @@ class EnderLeafController(object):
                     crop_data = Rectangle.from_circle((cx, cy, r + 16))
                 else:
                     crop_data = Rectangle(left=0, top=0, right=width, bottom=height)
-            if len(cycle) > 1:
+            if len(cycle.value) > 1:
                 result.append(
                     merge_images(
                         image_list=[crop_image(image, crop_data) for image in images],
                         merge_mode=merge_mode,
                     )
                 )
+                # result.append(
+                #     cv2.cvtColor(
+                #         merge_images_channels(
+                #             image_list=[
+                #                 crop_image(image, crop_data) for image in images
+                #             ],
+                #             channels=[("lab", "l"), ("lab", "a"), ("lab", "b")],
+                #             merge_modes=[
+                #                 ImageMergeMode.MIN,
+                #                 ImageMergeMode.MEDIAN,
+                #                 ImageMergeMode.MEDIAN,
+                #             ],
+                #         ),
+                #         cv2.COLOR_LAB2RGB,
+                #     )
+                # )
             else:
                 result.append(crop_image(images[0], crop_data))
         if switch_state is True:
             self.switch_state(CameraState.VIDEO)
-        self.acq_light_configurations = old_cycles
+        self.lights_cycle = old_cycles
         return result

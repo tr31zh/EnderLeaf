@@ -14,6 +14,7 @@ from skimage.feature import SIFT, match_descriptors
 
 from enderleaf.const import ImageMergeMode
 
+
 @dataclass
 class Rectangle:
     top: int | None = None
@@ -234,6 +235,21 @@ def merge_images(
             raise NotImplementedError(f"Unknown mode '{merge_mode}")
 
     return result
+
+
+def merge_images_channels(image_list: list, channels: list, merge_modes: list):
+    merged_channels = []
+    for (cs, cn), method in zip(channels, merge_modes):
+        merged_channels.append(
+            merge_images(
+                image_list=[
+                    get_channel(image=image, color_space=cs, channel=cn)
+                    for image in image_list
+                ],
+                merge_mode=method,
+            )
+        )
+    return cv2.merge(merged_channels)
 
 
 def canny(

@@ -3,14 +3,13 @@ import numpy as np
 import pandas as pd
 import cv2
 
+import albumentations as A
+
 from matplotlib.figure import Figure
 from matplotlib.patches import Circle
 import plotly.express as px
 import altair as alt
 import seaborn as sns
-
-
-import albumentations as A
 
 
 def plot_image_to_ax(ax, image, title=None, fontsize=18):
@@ -230,4 +229,22 @@ def plot_focus_plt(df, width: int = 200):
         dashes=False,
         ax=ax,
     )
+    return fig
+
+
+def plot_images_with_histograms(images: list, fig_height: int = 4):
+    fig = Figure(figsize=(len(images) * fig_height, fig_height * 2))
+    axii = fig.subplots(nrows=2, ncols=len(images))
+    color = ("b", "g", "r")
+    for idx, image in enumerate(images):
+        axii[0, idx].imshow(image)
+        axii[0, idx].set_axis_off()
+
+        ax = axii[1, idx]
+        for i, col in enumerate(color):
+            histr = cv2.calcHist([image], [i], None, [256], [0, 256])
+            ax.plot(histr, color=col)
+        ax.set_axis_off()
+
+    fig.tight_layout()
     return fig

@@ -225,3 +225,4 @@ qr_images
 .virtual_documents
 *.csv
 .vscode/settings.json
+*.zip
