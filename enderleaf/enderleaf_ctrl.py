@@ -989,7 +989,7 @@ class EnderLeafController(object):
             if CardPoint.WEST in light_conf:
                 card_str += "w"
             file_path = dst_folder.joinpath(
-                f"{exp_name}#{r}#{c}#{card_str}#{now_str}"
+                f"{exp_name}#{inoc}#{plate}#{r}#{c}#{card_str}#{now_str}"
             ).with_suffix(".png")
             file_paths.append(file_path)
             metadata = {
