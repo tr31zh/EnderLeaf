@@ -153,7 +153,7 @@ class EnderLeafController(object):
         self.best_focus_method = FM_BREN
 
         self.top_lights = Enderlights(default_leds["groov_led"], brightness=1)
-        self.lights_cycle = LightsCycle.ONE_FOURTH
+        self.light_cycles = [LightsCycle.ONE_FOURTH]
 
         self._positions = []
         self._old_crop_values = -1, -1, -1, -1
@@ -942,6 +942,7 @@ class EnderLeafController(object):
     @log_call
     def acquire_leaf_disc(
         self,
+        light_cycle: list,
         switch_state: bool = False,
         center_on_leaf: bool = False,
         exp_name: str | None = None,
@@ -955,7 +956,7 @@ class EnderLeafController(object):
     ):
         if switch_state is True:
             self.switch_state(CameraState.STILL)
-        cycle_id = int(format_datetime()) if len(self.lights_cycle.value) > 1 else None
+        cycle_id = int(format_datetime())
         file_paths = []
         images = []
         metadatas = []
@@ -967,8 +968,8 @@ class EnderLeafController(object):
             if len(circles["accepted"]) == 1:
                 _, ccx, ccy, _r = circles["accepted"][0]
                 self.center_on_target(cx, cy, ccx, ccy)
-        for light_conf in self.lights_cycle.value:
-            if len(self.lights_cycle.value) > 1:
+        for light_conf in light_cycle.value:
+            if len(light_cycle.value) > 1:
                 self.set_lights(light_conf, wait=0.2)
             else:
                 time.sleep(0.2)
@@ -1014,6 +1015,7 @@ class EnderLeafController(object):
                 "east": [CardPoint.EAST in light_conf],
                 "south": [CardPoint.SOUTH in light_conf],
                 "west": [CardPoint.WEST in light_conf],
+                "light_cycle": [light_cycle.name],
                 "center_on_leaf": [center_on_leaf],
                 "height": [z],
                 "crop_top": [self.crop_top],
@@ -1054,29 +1056,51 @@ class EnderLeafController(object):
         data_file_name = fld_data.joinpath(
             exp + "#I" + str(inoc) + "#P" + str(plate) + "#" + start_ts
         ).with_suffix(".csv")
-        self.set_lights(self.lights_cycle.value[0])
         job_list = self.parse_positions()
         len_job_list = len(job_list)
         for idx, p, c, r in job_list:
             self.move_position(np.append(p, z), index=idx)
-            images, _, file_paths, df_cycle = self.acquire_leaf_disc(
-                exp_name=exp,
-                inoc=inoc,
-                plate=plate,
-                r=r,
-                c=c,
-                start_ts=start_ts,
-                dst_folder=fld_images,
-                z=z,
-                center_on_leaf=center_on_leaf,
-            )
-            df = pd.concat([df, df_cycle])
-            for file_path, image in zip(file_paths, images):
-                cv2.imwrite(str(file_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-            if self.update_progress is not None:
-                self.update_progress(idx, len_job_list)
-            if self.status == ELStatus.STOP_REQUESTED:
-                break
+            for cycle_id, light_cycle in enumerate(self.light_cycles):
+                if len(self.light_cycles) > 1:
+                    self.set_lights(light_cycle.value[0])
+                    time.sleep(1)
+                images, _, file_paths, df_cycle = self.acquire_leaf_disc(
+                    exp_name=exp,
+                    light_cycle=light_cycle,
+                    inoc=inoc,
+                    plate=plate,
+                    r=r,
+                    c=c,
+                    start_ts=start_ts,
+                    dst_folder=fld_images,
+                    z=z,
+                    center_on_leaf=center_on_leaf is True and cycle_id == 0,
+                )
+                df = pd.concat([df, df_cycle])
+                for file_path, image in zip(file_paths, images):
+                    try:
+                        write_ok = cv2.imwrite(
+                            str(file_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                        )
+                    except Exception as e:
+                        self.log(
+                            kind=LogKind.EXCEPTION,
+                            message=f"Exception '{str(e)}' wheil saving image '{str(file_path)}'",
+                        )
+                    else:
+                        if write_ok is True:
+                            self.log(
+                                kind=LogKind.INFO, message=f"Wrote '{file_path.name}'"
+                            )
+                        else:
+                            self.log(
+                                kind=LogKind.ERROR,
+                                message=f"FAILED to write '{file_path.name}'",
+                            )
+                if self.update_progress is not None:
+                    self.update_progress(idx, len_job_list)
+                if self.status == ELStatus.STOP_REQUESTED:
+                    break
         write_dataframe(df, data_file_name)
         self.call_update_position_plot()
 
@@ -1150,22 +1174,22 @@ class EnderLeafController(object):
         img_min, img_max = (images[focus_data.argmin()], images[focus_data.argmax()])
         return [img_min, img_max, np.abs(img_max - img_min)]
 
-    def test_cycles(
+    def test_cycle(
         self,
-        cycles=LightsCycle.ONE_FOURTH,
+        cycles=[LightsCycle.ONE_FOURTH],
         merge_mode=ImageMergeMode.MIN,
         switch_state: bool = True,
         center_on_leaf: bool = True,
     ):
         if switch_state is True:
             self.switch_state(CameraState.STILL)
-        old_cycles = self.lights_cycle
         result = []
         for i, cycle in enumerate(cycles):
-            self.lights_cycle = cycle
-            self.set_lights(self.lights_cycle.value[0], wait=1)
+            self.set_lights(cycle.value[0], wait=1)
             images, *_ = self.acquire_leaf_disc(
-                switch_state=False, center_on_leaf=center_on_leaf and i == 0
+                light_cycle=cycle,
+                switch_state=False,
+                center_on_leaf=center_on_leaf and i == 0,
             )
             if i == 0:
                 height, width, _ = images[0].shape
@@ -1204,5 +1228,4 @@ class EnderLeafController(object):
                 result.append(crop_image(images[0], crop_data))
         if switch_state is True:
             self.switch_state(CameraState.VIDEO)
-        self.lights_cycle = old_cycles
         return result

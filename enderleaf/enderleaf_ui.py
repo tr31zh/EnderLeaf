@@ -189,7 +189,9 @@ sel_sensor_modes = pn.widgets.Select(
     value=2,
     sizing_mode="stretch_width",
 )
-bt_capture_still = pn.widgets.Button(name="Capture still", sizing_mode="stretch_width")
+bt_capture_still = pn.widgets.Button(
+    name="Capture still", icon="capture", icon_size="2em", sizing_mode="stretch_width"
+)
 bt_preview_start = pn.widgets.Button(
     name="Start preview",
     icon="player-play",
@@ -339,8 +341,9 @@ eis_lights_top_brightness = pn.widgets.EditableFloatSlider(
     value=controller.top_lights.brightness,
     sizing_mode="scale_width",
 )
-sel_lights_cycle = pn.widgets.Select(
+sel_lights_cycle = pn.widgets.MultiChoice(
     name="Acquisition lights cycle",
+    # label="Acquisition lights cycle",
     options={
         lc.name: lc
         for lc in [
@@ -351,7 +354,7 @@ sel_lights_cycle = pn.widgets.Select(
             LightsCycle.THREE_FOURTHS,
         ]
     },
-    value=controller.lights_cycle,
+    value=controller.light_cycles,
     sizing_mode="scale_width",
 )
 
@@ -574,9 +577,10 @@ def on_crop_changed(cl, cr, ct, cb, cm):
 def on_plate_properties_changed(x, y, rc, cc, fs, fd):
     controller.set_plate(x, y, rc, cc, fs, fd)
 
+
 @pn.depends(sel_lights_cycle.param.value, watch=True)
 def on_light_cycle_changed(light_cycle):
-    controller.lights_cycle = light_cycle
+    controller.light_cycles = light_cycle
 
 
 # MARK: UI

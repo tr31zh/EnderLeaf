@@ -232,19 +232,26 @@ def plot_focus_plt(df, width: int = 200):
     return fig
 
 
-def plot_images_with_histograms(images: list, fig_height: int = 4):
+def plot_images_with_histograms(
+    images: list, fig_height: int = 4, titles: list | None = None
+):
     fig = Figure(figsize=(len(images) * fig_height, fig_height * 2))
     axii = fig.subplots(nrows=2, ncols=len(images))
     color = ("b", "g", "r")
     for idx, image in enumerate(images):
-        axii[0, idx].imshow(image)
-        axii[0, idx].set_axis_off()
+        ax_img, ax_hist = (
+            (axii[0, idx], axii[1, idx]) if len(images) > 1 else (axii[0], axii[1])
+        )
 
-        ax = axii[1, idx]
+        ax_img.imshow(image)
+        if titles is not None and len(titles) > idx:
+            ax_img.set_title(titles[idx])
+        ax_img.set_axis_off()
+
         for i, col in enumerate(color):
             histr = cv2.calcHist([image], [i], None, [256], [0, 256])
-            ax.plot(histr, color=col)
-        ax.set_axis_off()
+            ax_hist.plot(histr, color=col)
+        ax_hist.set_axis_off()
 
     fig.tight_layout()
     return fig

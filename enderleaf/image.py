@@ -235,25 +235,28 @@ def merge_images(
         ImageMergeMode.AVG,
     ],
 ):
-    match merge_mode:
-        case ImageMergeMode.MIN:
-            result = np.minimum(image_list[0], image_list[1])
-            if len(image_list) == 2:
-                return result
-            for img in image_list[2:]:
-                result = np.minimum(img, result)
-        case ImageMergeMode.MAX:
-            result = np.maximum(image_list[0], image_list[1])
-            if len(image_list) == 2:
-                return result
-            for img in image_list[2:]:
-                result = np.maximum(img, result)
-        case ImageMergeMode.AVG:
-            result = np.mean(image_list, axis=0).astype(np.uint8)
-        case ImageMergeMode.MEDIAN:
-            result = np.median(image_list, axis=0).astype(np.uint8)
-        case _:
-            raise NotImplementedError(f"Unknown mode '{merge_mode}")
+    if len(image_list) == 1:
+        result = image_list[0]
+    else:
+        match merge_mode:
+            case ImageMergeMode.MIN:
+                result = np.minimum(image_list[0], image_list[1])
+                if len(image_list) == 2:
+                    return result
+                for img in image_list[2:]:
+                    result = np.minimum(img, result)
+            case ImageMergeMode.MAX:
+                result = np.maximum(image_list[0], image_list[1])
+                if len(image_list) == 2:
+                    return result
+                for img in image_list[2:]:
+                    result = np.maximum(img, result)
+            case ImageMergeMode.AVG:
+                result = np.mean(image_list, axis=0).astype(np.uint8)
+            case ImageMergeMode.MEDIAN:
+                result = np.median(image_list, axis=0).astype(np.uint8)
+            case _:
+                raise NotImplementedError(f"Unknown mode '{merge_mode}")
 
     return result
 

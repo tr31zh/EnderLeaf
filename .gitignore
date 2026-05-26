@@ -226,3 +226,4 @@ qr_images
 *.csv
 .vscode/settings.json
 *.zip
+*.tar
