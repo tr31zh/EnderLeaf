@@ -12,7 +12,7 @@ from skimage import color
 from skimage.transform import hough_circle, hough_circle_peaks
 from skimage.feature import SIFT, match_descriptors
 
-from enderleaf.const import ImageMergeMode
+from enderleaf.const import ImageMergeMode, COLOR_SPACES
 
 
 @dataclass
@@ -149,11 +149,11 @@ def get_channel(image: np.ndarray, color_space: str, channel: str) -> np.ndarray
         np.ndarray: Channel
     """
     channels = get_channels(image=image, color_space=color_space)
-    if channel.lower() in ["red", "h", "y", "l"]:
+    if channel.lower() in ["r", "h", "y", "l"]:
         return channels[0]
-    if channel.lower() in ["green", "s", "i", "a", "u", "cr"]:
+    if channel.lower() in ["g", "s", "i", "a", "u", "cr"]:
         return channels[1]
-    if channel.lower() in ["blue", "v", "q", "b", "cb"]:
+    if channel.lower() in ["b", "v", "q", "b", "cb"]:
         return channels[2]
     else:
         raise NotImplementedError(
@@ -261,19 +261,33 @@ def merge_images(
     return result
 
 
-def merge_images_channels(image_list: list, channels: list, merge_modes: list):
-    merged_channels = []
-    for (cs, cn), method in zip(channels, merge_modes):
-        merged_channels.append(
+def merge_images_channels(image_list: list, color_space: list, merge_modes: list):
+    result = cv2.merge(
+        [
             merge_images(
                 image_list=[
-                    get_channel(image=image, color_space=cs, channel=cn)
+                    get_channel(image=image, color_space=color_space, channel=channel)
                     for image in image_list
                 ],
                 merge_mode=method,
             )
-        )
-    return cv2.merge(merged_channels)
+            for channel, method in zip(COLOR_SPACES[color_space], merge_modes)
+        ]
+    )
+    if color_space == "rgb":
+        pass
+    elif color_space == "hsv":
+        result = cv2.cvtColor(result, cv2.COLOR_HSV2RGB)
+    elif color_space == "yiq":
+        raise NotImplementedError("Non conversion available for YIQ")
+    elif color_space == "lab":
+        result = cv2.cvtColor(result, cv2.COLOR_LAB2LRGB)
+    elif color_space == "yuv":
+        result = cv2.cvtColor(result, cv2.COLOR_YUV2RGB)
+    elif color_space == "ycrcb":
+        result = cv2.cvtColor(result, cv2.COLOR_YCrCb2RGB)
+        
+    return result
 
 
 def canny(

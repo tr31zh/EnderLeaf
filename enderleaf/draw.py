@@ -11,6 +11,9 @@ import plotly.express as px
 import altair as alt
 import seaborn as sns
 
+from enderleaf.const import COLOR_SPACES, C_CBF_RED, C_CBF_GREEN, C_CBF_BLUE
+from enderleaf.image import get_channels
+
 
 def plot_image_to_ax(ax, image, title=None, fontsize=18):
     """Plot image to existing ax and set title
@@ -233,25 +236,37 @@ def plot_focus_plt(df, width: int = 200):
 
 
 def plot_images_with_histograms(
-    images: list, fig_height: int = 4, titles: list | None = None
+    images: list,
+    color_spaces: list = ["rgb"],
+    fig_height: int = 4,
+    titles: list | None = None,
 ):
-    fig = Figure(figsize=(len(images) * fig_height, fig_height * 2))
-    axii = fig.subplots(nrows=2, ncols=len(images))
-    color = ("b", "g", "r")
+    fig = Figure(
+        figsize=(len(images) * fig_height, fig_height * (len(color_spaces) + 1))
+    )
+    axii = fig.subplots(nrows=1 + len(color_spaces), ncols=len(images))
     for idx, image in enumerate(images):
-        ax_img, ax_hist = (
-            (axii[0, idx], axii[1, idx]) if len(images) > 1 else (axii[0], axii[1])
-        )
+        ax_img = axii[0, idx] if len(images) > 1 else axii[0]
+        ax_hists = axii[1:, idx] if len(images) > 1 else axii[1:]
 
         ax_img.imshow(image)
         if titles is not None and len(titles) > idx:
             ax_img.set_title(titles[idx])
         ax_img.set_axis_off()
 
-        for i, col in enumerate(color):
-            histr = cv2.calcHist([image], [i], None, [256], [0, 256])
-            ax_hist.plot(histr, color=col)
-        ax_hist.set_axis_off()
+        for ax_hist, color_space in zip(ax_hists, color_spaces):
+            for color_value, color_label, channel in zip(
+                [C_CBF_RED, C_CBF_GREEN, C_CBF_BLUE],
+                COLOR_SPACES[color_space],
+                get_channels(image=image, color_space=color_space),
+            ):
+                histr = cv2.calcHist([channel], [0], None, [256], [0, 256])
+                ax_hist.plot(
+                    histr, color=np.array(color_value) / 255, label=color_label
+                )
+            ax_hist.set_axis_off()
+            if idx == 0:
+                ax_hist.legend()
 
     fig.tight_layout()
     return fig

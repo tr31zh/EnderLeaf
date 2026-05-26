@@ -53,10 +53,12 @@ C_CBF_RED = (0, 94, 213)[::-1]
 C_CBF_BLUE = (178, 114, 0)[::-1]
 
 COLOR_SPACES = {
-    "rgb": ["red", "green", "blue"],
+    "rgb": ["r", "g", "b"],
     "hsv": ["h", "s", "v"],
     "yiq": ["y", "i", "q"],
     "lab": ["l", "a", "b"],
+    "yuv": ["y", "u", "v"],
+    "ycrcb": ["y", "cr", "cb"],
 }
 
 TIME_FORMAT = "%Y%m%d%H%M%S"
