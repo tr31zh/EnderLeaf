@@ -67,6 +67,7 @@ DEFAULT_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_DATE_FORMAT = "%Y-%m-%d"
 DEFAULT_TIME_FORMAT = "%H:%M:%S"
 
+
 # MARK: Enums
 class FocusMode(Enum):
     MANUAL = "MANUAL"
@@ -100,18 +101,31 @@ class ImageMergeMode(Enum):
     MEDIAN = "median"
 
 
+class ImageMergeMethod(Enum):
+    RGB = ("rgb", [ImageMergeMode.MIN, ImageMergeMode.MIN, ImageMergeMode.MIN])
+    HSV = ("hsv", [ImageMergeMode.MEDIAN, ImageMergeMode.MEDIAN, ImageMergeMode.MIN])
+    LAB = ("lab", [ImageMergeMode.MIN, ImageMergeMode.MEDIAN, ImageMergeMode.MEDIAN])
+    YUV = ("yuv", [ImageMergeMode.MIN, ImageMergeMode.MEDIAN, ImageMergeMode.MEDIAN])
+    YCrCb = (
+        "ycrcb",
+        [ImageMergeMode.MIN, ImageMergeMode.MEDIAN, ImageMergeMode.MEDIAN],
+    )
+
+
 class CardPoint(Enum):
     NORTH = "NORTH"
     EAST = "EAST"
     SOUTH = "SOUTH"
     WEST = "WEST"
 
+
 class LogKind(Enum):
-    INFO= "info"
-    WARNING= "warning"
-    EXCEPTION= "exception"
+    INFO = "info"
+    WARNING = "warning"
+    EXCEPTION = "exception"
     ERROR = "error"
     CRITICAL = "critical"
+
 
 # MARK: Light cycles
 LIGHTS_CONF = [
@@ -131,6 +145,7 @@ LIGHTS_CONF = [
     [CardPoint.EAST, CardPoint.NORTH, CardPoint.WEST],
 ]
 LEN_LIGHTS_CONF = len(LIGHTS_CONF)
+
 
 class LightsCycle(Enum):
     OFF = [LIGHTS_CONF[0]]

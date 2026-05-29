@@ -102,12 +102,13 @@ def load_image(
         return None
 
 
-def get_channels(image, color_space):
+def get_channels(image, color_space, rgb_source:bool=True):
     """Get all channels from a color space
 
     Args:
         image (np.ndarray): Source RGB image
         color_space (str): color space
+        rgb_source (bool): True if source is RGB false if BGR, defaults to True
 
     Raises:
         NotImplementedError: Unknown color space
@@ -118,18 +119,18 @@ def get_channels(image, color_space):
     if color_space.lower() == "rgb":
         return cv2.split(image)
     elif color_space.lower() == "hsv":
-        return cv2.split(cv2.cvtColor(image, cv2.COLOR_BGR2HSV))
+        return cv2.split(cv2.cvtColor(image, cv2.COLOR_RGB2HSV))
     elif color_space.lower() == "yiq":
         return [
             ((c - np.min(c)) / (np.max(c) - np.min(c)) * 255).astype(np.uint8)
             for c in cv2.split(np.array(color.rgb2yiq(to_pil(image))))
         ]
     elif color_space.lower() == "lab":
-        return cv2.split(cv2.cvtColor(image, cv2.COLOR_BGR2LAB))
+        return cv2.split(cv2.cvtColor(image, cv2.COLOR_RGB2LAB))
     elif color_space.lower() == "yuv":
-        return cv2.split(cv2.cvtColor(image, cv2.COLOR_BGR2YUV))
+        return cv2.split(cv2.cvtColor(image, cv2.COLOR_RGB2YUV))
     elif color_space.lower() == "ycrcb":
-        return cv2.split(cv2.cvtColor(image, cv2.COLOR_BGR2YCrCb))
+        return cv2.split(cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb))
     else:
         raise NotImplementedError(f"Unknown color space {color_space}")
 
@@ -179,10 +180,10 @@ def equalize_hist(image, color_space):
 
 
 def to_pil(image, size: tuple = None) -> Image:
-    """Converts image from OpenCV format to Pillow format
+    """Converts image from OpenCV (RGB) format to Pillow format
 
     Args:
-        image (nd.array): Source image
+        image (nd.array): Source RGB image
         size (tuple, optional): Resize values. Defaults to None.
 
     Returns:
@@ -281,7 +282,7 @@ def merge_images_channels(image_list: list, color_space: list, merge_modes: list
     elif color_space == "yiq":
         raise NotImplementedError("Non conversion available for YIQ")
     elif color_space == "lab":
-        result = cv2.cvtColor(result, cv2.COLOR_LAB2LRGB)
+        result = cv2.cvtColor(result, cv2.COLOR_LAB2RGB)
     elif color_space == "yuv":
         result = cv2.cvtColor(result, cv2.COLOR_YUV2RGB)
     elif color_space == "ycrcb":
