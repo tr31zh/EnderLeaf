@@ -605,10 +605,22 @@ def ui_main():
             pn.Row(bt_move_to, sel_position),
             pn.Row(bt_launch_acquisition, bt_stop_acquisition),
         ),
-        pn.layout.Accordion(
+        # pn.layout.GridBox(
+        #     pn.layout.WidgetBox("### Live preview", video_pane),
+        #     pn.layout.WidgetBox("### Last still", still_pane),
+        #     sizing_mode="scale_width",
+        #     ncols=2
+        # ),
+        # pn.layout.Accordion(
+        #     ("Live preview", video_pane),
+        #     ("Still preview", still_pane),
+        #     active=[0],
+        #     sizing_mode="stretch_height",
+        # )
+        pn.layout.Tabs(
             ("Live preview", video_pane),
             ("Still preview", still_pane),
-            active=[0],
+            active=0,
             sizing_mode="stretch_height",
         ),
         crd_log,

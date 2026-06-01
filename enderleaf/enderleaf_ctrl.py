@@ -65,7 +65,7 @@ from enderleaf.image import (
     merge_images_channels,
     ImageMergeMode,
 )
-from enderleaf.qr_reader import get_qr_data, get_points_extremes, check_qr_code
+from enderleaf.qr_reader import get_qr_data, check_qr_code
 from enderleaf.draw import draw_circles
 
 logger = logger = logging.getLogger(__name__)
@@ -709,11 +709,48 @@ class EnderLeafController(object):
         qr_data = get_qr_data(image)
         if check_qr_code(qr_data) is False:
             old_brightness = self.top_lights.brightness
-            self.top_lights.brightness = 0
-            time.sleep(2)
-            qr_data = get_qr_data(self.capture_array()[0])
-            self.top_lights.brightness = old_brightness
-            time.sleep(2)
+            try:
+                self.top_lights.brightness = 0.5
+                time.sleep(2)
+                qr_data = get_qr_data(self.capture_array()[0])
+            finally:
+                self.top_lights.brightness = old_brightness
+                time.sleep(2)
+        if check_qr_code(qr_data) is False:
+            try:
+                self.shutter(False,2)
+                qr_data = get_qr_data(self.capture_array()[0])
+            finally:
+                self.shutter(True,2)
+        if check_qr_code(qr_data) is False:
+            try:
+                self.set_top_lights(True,[CardPoint.NORTH])
+                time.sleep(2)
+                qr_data = get_qr_data(self.capture_array()[0])
+            finally:
+                self.shutter(True,2)
+        if check_qr_code(qr_data) is False:
+            try:
+                self.set_top_lights(True,[CardPoint.EAST])
+                time.sleep(2)
+                qr_data = get_qr_data(self.capture_array()[0])
+            finally:
+                self.shutter(True,2)
+        if check_qr_code(qr_data) is False:
+            try:
+                self.set_top_lights(True,[CardPoint.SOUTH])
+                time.sleep(2)
+                qr_data = get_qr_data(self.capture_array()[0])
+            finally:
+                self.shutter(True,2)
+        if check_qr_code(qr_data) is False:
+            try:
+                self.set_top_lights(True,[CardPoint.WEST])
+                time.sleep(2)
+                qr_data = get_qr_data(self.capture_array()[0])
+            finally:
+                self.shutter(True,2)
+
         if check_qr_code(qr_data) is False:
             self.log(LogKind.ERROR, "Failed to read QR code")
         return qr_data
@@ -722,7 +759,7 @@ class EnderLeafController(object):
         qr_data = self.get_qr_data(image)
         if check_qr_code(qr_data) is False:
             raise ValueError("Unable to detect QR code")
-        min_x, min_y, max_x, max_y = get_points_extremes(points=qr_data["points"][0])
+        min_x, min_y, max_x, max_y = qr_data["points"][0]
         return (min_x + max_x) // 2, (min_y + max_y) // 2, min_x, min_y, max_x, max_y
 
     def build_snake(self, x, y) -> np.ndarray:
@@ -832,12 +869,16 @@ class EnderLeafController(object):
                 qr_cx, qr_cy, *_ = self.get_qr_pos(image)
             except:
                 self.get_focused_z(switch_state=False)
-                qr_cx, qr_cy, *_ = self.get_qr_pos(image)
+                qr_cx, qr_cy, *_ = self.get_qr_pos(self.capture_array()[0])
             step_x, step_y = -step_val if cx > qr_cx else step_val, (
                 step_val if cy > qr_cy else -step_val
             )
             self.move_relative(step_x, step_y)
-            new_qr_cx, new_qr_cy, *_ = self.get_qr_pos(self.capture_array()[0])
+            try:
+                new_qr_cx, new_qr_cy, *_ = self.get_qr_pos(self.capture_array()[0])
+            except:
+                self.get_focused_z(switch_state=False)
+                new_qr_cx, new_qr_cy, *_ = self.get_qr_pos(self.capture_array()[0])
 
             self._px_to_mm = 1 / (
                 (abs(qr_cx - new_qr_cx) + abs(qr_cy - new_qr_cy)) / 2 / 10
