@@ -8,6 +8,7 @@ dependencies = [
     "albumentations>=2.0.8",
     "altair>=6.1.0",
     "black>=26.3.1",
+    "flet[all]>=0.86.0",
     "ipympl>=0.10.0",
     "ipywidgets>=8.1.8",
     "ipywidgets-bokeh>=1.7.0",
@@ -22,7 +23,9 @@ dependencies = [
     "plotly>=6.7.0",
     "pretty>=0.1",
     "pyserial>=3.5",
+    "qreader>=3.16",
     "rich>=14.3.3",
     "scikit-image>=0.26.0",
     "seaborn>=0.13.2",
+    "websockets>=16.1",
 ]
