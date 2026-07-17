@@ -120,7 +120,7 @@ class LogLevel(str, Enum):
                 return -13
 
     @staticmethod
-    def int_to_log_level(value: int) -> LogLevel:
+    def int_to_log_level(value: int):
         match value:
             case 0:
                 return LogLevel.INFO

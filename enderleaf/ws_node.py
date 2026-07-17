@@ -18,11 +18,23 @@ from enderleaf.enums import (
 )
 from enderleaf.socket_message import SocketMessage, result_message
 from enderleaf.enderleaf_ctrl import EnderLeafController, ELStatus
+from enderscope.serial import list_ports, default_printer_port
 
 controller = EnderLeafController()
 controller.camera.color_step_size = 5
 controller.camera.color_index = random.randint(0, 255)
 asyncio.run(controller.start())
+
+
+def sigint_handler(sig, frame):
+    print("")
+    print("Stopping node")
+    controller.sync_stop()
+    print("Controller stopped")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, sigint_handler)
 
 
 async def node_connect_printer(websocket, **kwargs):
@@ -35,7 +47,9 @@ async def node_connect_printer(websocket, **kwargs):
     )
     await websocket.send(
         result_message(
-            result=await controller.connect_printer(kwargs.get("port", None)),
+            result=await controller.connect_printer(
+                kwargs.get("port", str(default_printer_port()))
+            ),
             ok_message="Connected to printer",
             nok_message="Failed to connect to printer",
         ).dump()
@@ -280,6 +294,7 @@ async def handler(websocket):
 async def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     host = "0.0.0.0"
+    print(socket.gethostname())
     async with websockets.serve(handler, host, port):
         print(
             f"Node server running on {host}:{port} (Hostname: {socket.gethostname()})"

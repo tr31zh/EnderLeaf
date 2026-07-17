@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "albumentations>=2.0.8",
-    "altair>=6.1.0",
     "black>=26.3.1",
     "flet[all]>=0.86.0",
     "ipympl>=0.10.0",

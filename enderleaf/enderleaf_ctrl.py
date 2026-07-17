@@ -34,7 +34,7 @@ from enderscope.scan_patterns import (
     plot_discs_status,
 )
 from enderscope.bed import bed
-from enderscope.serial import list_ports, default_printer_port, Stage
+from enderscope.serial import list_ports, Stage
 from enderscope.enderlights_pi import Enderlights, default_leds
 
 from enderleaf.const import FM_BREN, PRECISE_TIME_FORMAT
@@ -621,6 +621,9 @@ class EnderLeafController(object):
                 self._camera_state = CameraState.STILL
 
     async def stop(self):
+        self.sync_stop()
+
+    def sync_stop(self):
         if self._camera_state not in [CameraState.IDLE, CameraState.SIMULATION]:
             self.stop_event.set()
             self.thread.join()
@@ -682,19 +685,19 @@ class EnderLeafController(object):
             return
         self._stage.move_position(position)
         await self.send_position_plot(index=index)
-        self.finish_moves()
+        await self.finish_moves()
 
     async def move_absolute(self, x, y, z):
         if await self.printer_ready() is False:
             return
         self._stage.move_absolute(x, y, z)
-        self.finish_moves()
+        await self.finish_moves()
 
     async def move_relative(self, x, y, z: int | None = None):
         if await self.printer_ready() is False:
             return
         self._stage.move_relative(x, y, z)
-        self.finish_moves()
+        await self.finish_moves()
 
     async def move_to(self, position: int):
         if len(self._positions) == 0:
@@ -715,7 +718,7 @@ class EnderLeafController(object):
                 if self._stage.safe_home() is False:
                     raise ConnectionError("Unable to home")
             self._homed = True
-            self.finish_moves()
+            await self.finish_moves()
         except Exception as e:
             await self.send_problem(
                 level=LogLevel.EXCEPTION, message=f"Unable to home: {str(e)}"
@@ -724,15 +727,15 @@ class EnderLeafController(object):
         else:
             return True
 
-    async def connect_printer(self, port_name):
+    async def connect_printer(self, port_name=None):
         try:
             for port in list_ports():
                 if str(port) == port_name:
                     self._stage = Stage(port, 115200)
-                    self.go_home()
+                    await self.go_home()
                     break
-            x, y, _ = self.get_position()
-            self.move_absolute(x, y, self.focus_start_z)
+            x, y, _ = await self.get_position()
+            await self.move_absolute(x, y, self.focus_start_z)
         except Exception as e:
             await self.send_problem(
                 level=LogLevel.EXCEPTION,
