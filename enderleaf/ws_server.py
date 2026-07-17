@@ -27,9 +27,10 @@ from enderleaf.enums import MsgType, LogLevel, ControllerCommands, NodeViewOptio
 from enderleaf.socket_message import SocketMessage
 from enderleaf.image import encode_image
 
-NUM_NODES = 6
+NUM_NODES = 1
 PORTS = [i + 8760 for i in range(NUM_NODES)]
-NODES = [f"ws://localhost:{p}" for p in PORTS]
+# NODES = [f"ws://localhost:{p}" for p in PORTS]
+NODES = [f"ws://147.100.144.150:{p}" for p in PORTS]
 BTN_HEIGHT = 40
 PATH_LOG = Path(__file__).resolve().parent.parent.joinpath("logs")
 NODE_UI_DEFAULT_WIDTH = 600
