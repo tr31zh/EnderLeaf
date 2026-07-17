@@ -2,6 +2,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from enum import Enum
 from typing import Literal
+import base64
 
 import numpy as np
 import cv2
@@ -12,7 +13,8 @@ from skimage import color
 from skimage.transform import hough_circle, hough_circle_peaks
 from skimage.feature import SIFT, match_descriptors
 
-from enderleaf.const import ImageMergeMode, COLOR_SPACES
+from enderleaf.const import COLOR_SPACES
+from enderleaf.enums import ImageMergeMode
 
 
 @dataclass
@@ -101,6 +103,11 @@ def load_image(
         print(f"Failed load image: {str(e)}")
         return None
 
+def encode_image(img, format=".jpg") -> str:
+    success, encoded = cv2.imencode(format, img)
+    if not success:
+        raise ValueError("Image encoding failed")
+    return base64.b64encode(encoded.tobytes()).decode("utf-8")
 
 def get_channels(image, color_space, rgb_source:bool=True):
     """Get all channels from a color space

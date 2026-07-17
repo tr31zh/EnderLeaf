@@ -18,7 +18,7 @@ from enderscope.serial import list_ports, default_printer_port
 from enderscope.scan_patterns import plot_path_status
 from enderscope.bed import bed
 
-from enderleaf.const import CropMode, ELStatus, LightsCycle
+from enderleaf.enums import CropMode, ELStatus, LightsCycle
 from enderleaf.draw import plot_focus_plt
 from enderleaf.tools import ensure_folder
 from enderleaf.image import to_pil, safe_pil_resize

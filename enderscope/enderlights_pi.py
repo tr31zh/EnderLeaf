@@ -18,7 +18,7 @@ except:
 
     import numpy as np
 
-from enderleaf.const import CardPoint
+from enderleaf.enums import CardPoint
 
 @dataclass
 class LedData:

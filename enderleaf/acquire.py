@@ -6,7 +6,7 @@ import numpy as np
 
 import enderleaf.image as ei
 import enderleaf.qr_reader as eqr
-from enderleaf.const import FocusMode
+from enderleaf.enums import FocusMode
 
 
 def capture(
