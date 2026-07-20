@@ -10,6 +10,7 @@ import base64
 import logging
 import random
 import sys
+from dataclasses import dataclass
 
 import numpy as np
 from PIL import Image
@@ -18,6 +19,7 @@ import cv2
 import matplotlib.pyplot as plt
 
 import flet as ft
+import flet_datatable2 as fdt
 
 ROOT_FOLDER = Path(__file__).parent.parent
 sys.path.append(str(ROOT_FOLDER))
@@ -27,10 +29,10 @@ from enderleaf.enums import MsgType, LogLevel, ControllerCommands, NodeViewOptio
 from enderleaf.socket_message import SocketMessage
 from enderleaf.image import encode_image
 
-NUM_NODES = 1
+NUM_NODES = 4
 PORTS = [i + 8760 for i in range(NUM_NODES)]
-# NODES = [f"ws://localhost:{p}" for p in PORTS]
-NODES = [f"ws://147.100.144.150:{p}" for p in PORTS]
+NODES = [f"ws://localhost:{p}" for p in PORTS]
+# NODES = [f"ws://147.100.144.150:{p}" for p in PORTS]
 BTN_HEIGHT = 40
 PATH_LOG = Path(__file__).resolve().parent.parent.joinpath("logs")
 NODE_UI_DEFAULT_WIDTH = 600
@@ -202,6 +204,12 @@ def plot_to_image(fig, dpi=300):
     return img_arr
 
 
+@dataclass
+class ConfUnit:
+    name: str
+    value: str
+
+
 class NodeUi:
     def __init__(self, node_ip, max_width: int = NODE_UI_DEFAULT_WIDTH):
         self.node_ip = node_ip
@@ -223,29 +231,46 @@ class NodeUi:
             gapless_playback=True,
             expand=True,
         )
-
         self.position_plot = ft.Image(
             src=generate_frame(),
             fit=ft.BoxFit.CONTAIN,
             gapless_playback=True,
             expand=True,
         )
+        self.config = fdt.DataTable2(
+            expand=True,
+            columns=[
+                fdt.DataColumn2(
+                    label=ft.Text("Param"),
+                    size=fdt.DataColumnSize.L,
+                    heading_row_alignment=ft.MainAxisAlignment.START,
+                ),
+                fdt.DataColumn2(
+                    label=ft.Text("Value"),
+                    numeric=True,
+                    heading_row_alignment=ft.MainAxisAlignment.END,
+                ),
+            ],
+            rows=[],
+        )
+
         self.tab_bar = ft.TabBar(
             tabs=[
                 ft.Tab(label=NodeViewOption.IMAGE.value),
                 ft.Tab(label=NodeViewOption.PLOT_POSITION.value),
                 ft.Tab(label=NodeViewOption.PLOT_FOCUS.value),
+                ft.Tab(label=NodeViewOption.CONFIG.value),
             ],
             visible=False,
             scrollable=False,
         )
         self.tab_bar_view = ft.TabBarView(
             expand=True,
-            controls=[self.image, self.position_plot, self.focus_plot],
+            controls=[self.image, self.position_plot, self.focus_plot, self.config],
         )
         self.main_view = ft.Tabs(
             selected_index=0,
-            length=3,
+            length=4,
             expand=True,
             content=ft.Column(expand=True, controls=[self.tab_bar, self.tab_bar_view]),
         )
@@ -309,13 +334,17 @@ class NodeUi:
                 await self.main_view.move_to(1)
             case NodeViewOption.PLOT_FOCUS:
                 await self.main_view.move_to(2)
+            case NodeViewOption.CONFIG:
+                await self.main_view.move_to(3)
             case _:
                 raise NotImplementedError(f"Unknown node view mode: {e.control.value}")
         self.main_view.update()
 
-    def reset(self):
+    def reset(self, message: str | None = None):
         self.max_level = 0
-        self.update_alert(log_level=LogLevel.INFO, message="Ready")
+        self.update_alert(
+            log_level=LogLevel.INFO, message="Ready" if message is None else message
+        )
 
     def on_change_enabled(self, e: ft.Event[ft.Checkbox]):
         for control in [self.main_view, self.progress, self.alert, self.expand_toggle]:
@@ -361,6 +390,20 @@ class NodeUi:
         self.focus_plot.src = image
         self.focus_plot.update()
 
+    def update_config_data(self, key, value: str):
+        if key is None:
+            self.config.rows = []
+        else:
+            self.config.rows.append(
+                fdt.DataRow2(
+                    specific_row_height=50,
+                    cells=[
+                        ft.DataCell(content=ft.Text(key)),
+                        ft.DataCell(content=ft.Text(str(value))),
+                    ],
+                )
+            )
+
 
 node_uis = {k: NodeUi(k, max_width=NODE_UI_DEFAULT_WIDTH) for k in NODES}
 
@@ -404,6 +447,11 @@ async def listen_for_updates(websocket, node_ip):
                     node_ui.update_position_plot(image=soccket_message.image)
                 case MsgType.FOCUS_PLOT:
                     node_ui.update_focus_plot(image=soccket_message.image)
+                case MsgType.CONFIG_DATA:
+                    print(soccket_message.key, soccket_message.value)
+                    node_ui.update_config_data(
+                        key=soccket_message.key, value=soccket_message.value
+                    )
                 case MsgType.RESULT:
                     node_ui.update_alert(
                         log_level=soccket_message.level, message=soccket_message.message
@@ -455,12 +503,24 @@ async def execute_on_node(uri, func_name, **kwargs):
             asyncio.create_task(listen_for_updates(websocket, uri))
             message = {"func": func_name, "kwargs": kwargs}
             await websocket.send(json.dumps(message))
-            await asyncio.wait_for(completion_events[uri].wait(), timeout=None)
+            await asyncio.wait_for(
+                completion_events[uri].wait(),
+                timeout=(
+                    5
+                    if func_name
+                    in [ControllerCommands.PING, ControllerCommands.CONNECT_PRINTER]
+                    else None
+                ),
+            )
     except asyncio.TimeoutError as e:
-        log(level=LogLevel.ERROR, message="Timeout waiting for completion", node_ip=uri)
+        log(
+            level=LogLevel.ERROR,
+            message=f"Timeout error for '{func_name}': {str(e)}",
+            node_ip=uri,
+        )
         node_uis[uri].update_alert(
             log_level=LogLevel.EXCEPTION,
-            message=f"Time out error for '{func_name}': {e}",
+            message=f"Timeout error for '{func_name}': {str(e)}",
         )
     except Exception as e:
         log(
@@ -492,8 +552,7 @@ async def run_task(task_name: ControllerCommands = ControllerCommands.START):
     if fs_node is None:
         for uri in NODES:
             node_ui = node_uis[uri]
-            if task_name == "start":
-                node_ui.reset()
+            node_ui.reset(f"{task_name.capitalize().replace("_", " ")} in progress...")
             if node_ui.title.value is False:
                 continue
             tasks.append(
@@ -502,8 +561,7 @@ async def run_task(task_name: ControllerCommands = ControllerCommands.START):
                 )
             )
     else:
-        if task_name == ControllerCommands.START:
-            fs_node.reset()
+        fs_node.reset(f"{task_name.capitalize().replace("_", " ")} in progress...")
         tasks.append(
             asyncio.create_task(execute_on_node(fs_node.node_ip, task_name, **kwargs))
         )
@@ -530,7 +588,7 @@ async def set_disable(is_disable: bool, is_stop_enabled: bool):
         bt_idle,
         bt_launch,
         bt_move_to,
-        bt_capture_still,
+        # bt_capture_still,
         bt_close,
         bt_auto,
         bt_far,
@@ -565,9 +623,12 @@ bt_connect_printer = ft.FilledButton(
     height=BTN_HEIGHT,
 )
 bt_ping = EnderButton(content="Ping", on_click=on_run_task, icon=ft.Icons.NETWORK_PING)
-bt_capture_still = EnderButton(
-    content="Capture still", on_click=on_run_task, icon=ft.Icons.ADD_A_PHOTO_SHARP
+bt_get_config = EnderButton(
+    content="Get config", on_click=on_run_task, icon=ft.Icons.SETTINGS_ROUNDED
 )
+# bt_capture_still = EnderButton(
+#     content="Capture still", on_click=on_run_task, icon=ft.Icons.ADD_A_PHOTO_SHARP
+# )
 bt_home = EnderButton(content="Go Home", on_click=on_run_task, icon=ft.Icons.HOME)
 bt_idle = EnderButton(
     content="Go Idle",
@@ -603,6 +664,7 @@ dd_view = ft.Dropdown(
             NodeViewOption.IMAGE,
             NodeViewOption.PLOT_POSITION,
             NodeViewOption.PLOT_FOCUS,
+            NodeViewOption.CONFIG,
         ]
     ],
     expand=True,
@@ -630,10 +692,11 @@ side_buttons = ft.Column(
     controls=[
         ft.Row(bt_connect_printer),
         ft.Row(bt_ping),
+        ft.Row(bt_get_config),
         ft.Row(bt_home),
         ft.Row(bt_idle),
         ft.Row(bt_park),
-        ft.Row(bt_capture_still),
+        # ft.Row(bt_capture_still),
         ft.Row(controls=[bt_move_to, dd_position]),
         ft.Row(controls=[ft.Text("View"), dd_view]),
         ft.Row(controls=[chk_show_log]),

@@ -2,7 +2,7 @@ import subprocess
 import sys
 import time
 
-NUM_NODES = 1
+NUM_NODES = 6
 PORTS = [i + 8760 for i in range(NUM_NODES)]
 
 NODES = [f"ws://localhost:{p}" for p in PORTS]

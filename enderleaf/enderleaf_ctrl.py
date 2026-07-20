@@ -43,7 +43,6 @@ from enderleaf.enums import (
     CropMode,
     CardPoint,
     LightsCycle,
-    LogKind,
     MsgType,
     LogLevel,
     ELStatus,
@@ -161,7 +160,7 @@ class EnderLeafController(object):
     async def send_image(self, image):
         if self.socket is not None:
             await self.socket.send(
-                SocketMessage(type=MsgType.IMAGE, message=encode_image(image)).dump()
+                SocketMessage(type=MsgType.IMAGE, image=encode_image(image)).dump()
             )
 
     async def send_problem(self, level: LogLevel, message: str):
@@ -215,10 +214,44 @@ class EnderLeafController(object):
             ).dump()
         )
 
+    async def send_data(self, data):
+        if self.socket is None:
+            return
+        await self.socket.send(
+            SocketMessage(type=MsgType.CONFIG_DATA, image=data).dump()
+        )
+
     async def send_ping_feedback(self):
         try:
-            await self.send_message("Ping received")
+            print("ping requested")
+            image, _ = await self.capture_array()
+            await self.send_image(image=image)
+            print("image sent")
+            # await self.send_data(self.to_json())
         except Exception as e:
+            await self.send_problem(
+                level=LogLevel.EXCEPTION, message=f"Ping failed: {str(e)}"
+            )
+            return False
+        else:
+            return True
+
+    async def send_config(self):
+        if self.socket is None:
+            return
+        try:
+            await self.socket.send(
+                SocketMessage(type=MsgType.CONFIG_DATA, key=None).dump()
+            )
+            for k, v in self.to_json().items():
+                await self.socket.send(
+                    SocketMessage(type=MsgType.CONFIG_DATA, key=k, value=v).dump()
+                )
+        except Exception as e:
+            await self.send_problem(
+                level=LogLevel.EXCEPTION,
+                message=f"Failed to send config data: {str(e)}",
+            )
             return False
         else:
             return True
@@ -240,15 +273,15 @@ class EnderLeafController(object):
     def log(self, kind, message: str):
         indent = ""
         match kind:
-            case LogKind.INFO:
+            case LogLevel.INFO:
                 logger.info(indent + message)
-            case LogKind.WARNING:
+            case LogLevel.WARNING:
                 logger.warning(indent + message)
-            case LogKind.EXCEPTION:
+            case LogLevel.EXCEPTION:
                 logger.exception(indent + message)
-            case LogKind.ERROR:
+            case LogLevel.ERROR:
                 logger.error(indent + message)
-            case LogKind.CRITICAL:
+            case LogLevel.CRITICAL:
                 logger.critical(indent + message)
             case _:
                 raise NotImplementedError(f"Unknown log kind '{kind}'")
@@ -269,11 +302,6 @@ class EnderLeafController(object):
                 "focus_start_z",
                 "focus_delta_z",
             ]
-        } | {
-            "lights_conf": {
-                "top": self.top_lights.to_json(),
-                # "side": self.side_lights.to_json(),
-            }
         }
 
     def from_json(self, data: dict) -> None:
@@ -283,8 +311,6 @@ class EnderLeafController(object):
                     setattr(self, k, v)
                 except:
                     pass
-        self.top_lights.from_json(data["lights_conf"]["top"])
-        # self.side_lights.from_json(data["lights_conf"]["side"])
 
     def backup_crop_values(self):
         self._old_crop_values = (
@@ -487,7 +513,7 @@ class EnderLeafController(object):
             }
         else:
             cam_controls = {"AeEnable": True, "AwbEnable": True}
-        self.log(LogKind.INFO, f"New controls: {cam_controls}")
+        self.log(LogLevel.INFO, f"New controls: {cam_controls}")
         self.set_controls(cam_controls)
 
     async def set_top_lights(self, state: bool, card_points: list | None = None):
@@ -824,7 +850,7 @@ class EnderLeafController(object):
                 await self.shutter(True, 2)
 
         if check_qr_code(qr_data) is False:
-            self.log(LogKind.ERROR, "Failed to read QR code")
+            self.log(LogLevel.ERROR, "Failed to read QR code")
         return qr_data
 
     def get_qr_pos(self, image):
@@ -1011,12 +1037,13 @@ class EnderLeafController(object):
             exp_name = "ExpXXDMXX#IX#PXX"
             exp, inoc, plate = exp_name.split("#")
             self.log(
-                LogKind.EXCEPTION,
+                LogLevel.EXCEPTION,
                 f"Failed to detect QR code switching to default plate {plate} in experiemnt {exp}, inoc {inoc}",
             )
         else:
             self.log(
-                LogKind.INFO, f"Detected plate {plate} in experiemnt {exp}, inoc {inoc}"
+                LogLevel.INFO,
+                f"Detected plate {plate} in experiemnt {exp}, inoc {inoc}",
             )
         return exp, inoc, plate, z
 
@@ -1190,17 +1217,17 @@ class EnderLeafController(object):
                         )
                     except Exception as e:
                         self.log(
-                            kind=LogKind.EXCEPTION,
+                            kind=LogLevel.EXCEPTION,
                             message=f"Exception '{str(e)}' wheil saving image '{str(file_path)}'",
                         )
                     else:
                         if write_ok is True:
                             self.log(
-                                kind=LogKind.INFO, message=f"Wrote '{file_path.name}'"
+                                kind=LogLevel.INFO, message=f"Wrote '{file_path.name}'"
                             )
                         else:
                             self.log(
-                                kind=LogKind.ERROR,
+                                kind=LogLevel.ERROR,
                                 message=f"FAILED to write '{file_path.name}'",
                             )
                 if self.update_progress is not None:

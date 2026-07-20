@@ -51,14 +51,6 @@ class CardPoint(Enum):
     WEST = "WEST"
 
 
-class LogKind(Enum):
-    INFO = "info"
-    WARNING = "warning"
-    EXCEPTION = "exception"
-    ERROR = "error"
-    CRITICAL = "critical"
-
-
 LIGHTS_CONF = [
     [],
     [CardPoint.EAST, CardPoint.NORTH, CardPoint.WEST, CardPoint.SOUTH],
@@ -87,13 +79,14 @@ class LightsCycle(Enum):
 
 
 class MsgType(str, Enum):
-    PROGRESS = "progress"
-    RESULT = "result"
-    IMAGE = "image"
-    MESSAGE = "message"
-    PROBLEM = "problem"
-    FOCUS_PLOT = "focus_plot"
-    POSITION_PLOT = "position_plot"
+    PROGRESS = "PROGRESS".lower()
+    RESULT = "RESULT".lower()
+    IMAGE = "IMAGE".lower()
+    MESSAGE = "MESSAGE".lower()
+    PROBLEM = "PROBLEM".lower()
+    FOCUS_PLOT = "FOCUS_PLOT".lower()
+    POSITION_PLOT = "POSITION_PLOT".lower()
+    CONFIG_DATA = "CONFIG_DATA".lower()
 
 
 class LogLevel(str, Enum):
@@ -143,25 +136,27 @@ class LaunchOptons(str, Enum):
 
 
 class ControllerCommands(str, Enum):
-    START = "node_start"
-    STOP = "node_stop"
-    PING = "node_ping"
-    CAPTURE_STILL = "node_capture_still"
-    AUTO = "node_auto"
-    CLOSE = "node_close"
-    FAR = "node_far"
-    CONNECT_PRINTER = "node_connect_printer"
-    GO_HOME = "node_go_home"
-    GO_IDLE = "node_go_idle"
-    GO_PARK = "node_go_park"
-    CENTER_ON_QR_CODE = "node_center_on_qr_code"
-    CHECK_CORNERS = "node_check_corners"
-    TOGGLE_LIGHTS = "node_toggle_lights"
-    CYCLE_LIGHTS = "node_cycle_lights"
-    MOVE_TO = "node_move_to"
+    START = "start"
+    STOP = "stop"
+    PING = "ping"
+    CAPTURE_STILL = "capture_still"
+    AUTO = "auto"
+    CLOSE = "close"
+    FAR = "far"
+    CONNECT_PRINTER = "connect_printer"
+    GO_HOME = "go_home"
+    GO_IDLE = "go_idle"
+    GO_PARK = "go_park"
+    CENTER_ON_QR_CODE = "center_on_qr_code"
+    CHECK_CORNERS = "check_corners"
+    TOGGLE_LIGHTS = "toggle_lights"
+    CYCLE_LIGHTS = "cycle_lights"
+    MOVE_TO = "move_to"
+    GET_CONFIG = "GET_CONFIG".lower()
 
 
 class NodeViewOption(str, Enum):
     IMAGE = "Image"
     PLOT_POSITION = "Position Plot"
     PLOT_FOCUS = "Focus Plot"
+    CONFIG = "Config"

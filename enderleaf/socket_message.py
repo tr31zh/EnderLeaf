@@ -13,15 +13,22 @@ class SocketMessage:
     step: int = 0
     total: int = 0
     level: LogLevel = LogLevel.INFO
+    key: str | None = None
+    value: str = ""
 
     def to_json(self):
         return {
-            "type": self.type,
-            "message": self.message,
-            "image": self.image,
-            "step": self.step,
-            "total": self.total,
-            "level": self.level,
+            k: getattr(self, k)
+            for k in [
+                "type",
+                "message",
+                "image",
+                "step",
+                "total",
+                "level",
+                "key",
+                "value",
+            ]
         }
 
     def __str__(self) -> str:

@@ -40,22 +40,6 @@ wheels = [
 ]
 
 [[package]]
-name = "altair"
-version = "6.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "jinja2" },
-    { name = "jsonschema" },
-    { name = "narwhals" },
-    { name = "packaging" },
-    { name = "typing-extensions", marker = "python_full_version < '3.15'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/3a/1e/365a9144db3254f86f1b974660b9ede1e9a38c9dc0730e4a9b1192eec5d6/altair-6.1.0.tar.gz", hash = "sha256:dda699216cf85b040d968ae5a569ad45957616811e38760a85e5118269daca67", size = 765519, upload-time = "2026-04-21T13:08:46.44Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ce/63/5dacc8d8306c715088b897a479e551bc0779fd2f0f26c97fec5e36542b4e/altair-6.1.0-py3-none-any.whl", hash = "sha256:fdf5fd939512e5b2fc4441c82dfd2635e706defbd037db0ac429ef5ddce66c3b", size = 796996, upload-time = "2026-04-21T13:08:48.549Z" },
-]
-
-[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -561,9 +545,9 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "albumentations" },
-    { name = "altair" },
     { name = "black" },
     { name = "flet", extra = ["all"] },
+    { name = "flet-datatable2" },
     { name = "ipympl" },
     { name = "ipywidgets" },
     { name = "ipywidgets-bokeh" },
@@ -588,9 +572,9 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "albumentations", specifier = ">=2.0.8" },
-    { name = "altair", specifier = ">=6.1.0" },
     { name = "black", specifier = ">=26.3.1" },
     { name = "flet", extras = ["all"], specifier = ">=0.86.0" },
+    { name = "flet-datatable2", specifier = ">=0.86.0" },
     { name = "ipympl", specifier = ">=0.10.0" },
     { name = "ipywidgets", specifier = ">=8.1.8" },
     { name = "ipywidgets-bokeh", specifier = ">=1.7.0" },
@@ -694,6 +678,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/46/2b/4fb6cb2686aac6587e6882a26fa2dbaeb9d0afd5c1134940efcda9c8c342/flet_cli-0.86.0.tar.gz", hash = "sha256:777d0238ce6e907a813c7281e1628c6a071bfc032e228b0f5cb538706c67f363", size = 82012, upload-time = "2026-07-14T21:50:36.986Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/e3/5d4daa175c65c4060095073bb7a7d494482b46077d92ed5c77ee6b11a0fd/flet_cli-0.86.0-py3-none-any.whl", hash = "sha256:2f37857c5b26fc1d5f19d84a9185300bd1061a8244e03f930d8f33c0b85ca8cb", size = 96493, upload-time = "2026-07-14T21:50:35.692Z" },
+]
+
+[[package]]
+name = "flet-datatable2"
+version = "0.86.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "flet" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/16/40/77e163208acac65d099f850168a7f69f98a0fbbbb81ca2f18cbe2a6b701d/flet_datatable2-0.86.0.tar.gz", hash = "sha256:64755294453224ba563850147885d559856d8600feadc34146b0dc36a6dfdb47", size = 14956, upload-time = "2026-07-14T21:51:12.24Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/93/45/3bcec50b399ada1482f4329aa62dd12224c034255e23a42e2c0003a1fcb1/flet_datatable2-0.86.0-py3-none-any.whl", hash = "sha256:c6dc3b3b444b43dca00f1c028721666184ee6d45717a0334cd77a37968e51930", size = 17537, upload-time = "2026-07-14T21:51:11.341Z" },
 ]
 
 [[package]]

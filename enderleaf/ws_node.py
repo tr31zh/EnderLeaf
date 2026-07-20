@@ -73,6 +73,23 @@ async def node_ping(websocket, **kwargs):
     )
 
 
+async def node_get_config(websocket, **kwargs):
+    controller.socket = websocket
+    await websocket.send(
+        SocketMessage(
+            type=MsgType.RESULT,
+            message="Retrieving node config. No other operation is allowed",
+        ).dump()
+    )
+    await websocket.send(
+        result_message(
+            result=await controller.send_config(),
+            ok_message="Config sent",
+            nok_message="Failed to send config",
+        ).dump()
+    )
+
+
 async def node_go_home(websocket, **kwargs):
     controller.socket = websocket
     await websocket.send(
@@ -254,6 +271,7 @@ FUNCTION_REGISTRY = {
     ControllerCommands.TOGGLE_LIGHTS: node_toggle_lights,
     ControllerCommands.CYCLE_LIGHTS: node_cycle_lights,
     ControllerCommands.MOVE_TO: node_move_to,
+    ControllerCommands.GET_CONFIG: node_get_config,
 }
 
 
@@ -261,7 +279,7 @@ async def handler(websocket):
     async for message in websocket:
         try:
             data = json.loads(message)
-            func_name = "node_" + data.get("func")
+            func_name = data.get("func")
             kwargs = data.get("kwargs", {})
 
             if func_name not in FUNCTION_REGISTRY:
