@@ -65,7 +65,7 @@ class MemoryFilter(logging.Filter):
 
 
 log_view = ft.ListView(
-    spacing=10, padding=20, auto_scroll=True, expand=1, visible=False
+    spacing=10, padding=20, auto_scroll=True, expand=1, visible=False, auto_scroll_animation=0
 )
 
 
@@ -94,6 +94,7 @@ def level_to_color(level: LogLevel | int):
         case _:
             return None
 
+logging.DEBUG
 
 def log(level, message: str, node_ip: str | None = None):
     msg = f"{dt.now().strftime(DEFAULT_DATETIME_FORMAT)} | "
@@ -101,6 +102,9 @@ def log(level, message: str, node_ip: str | None = None):
         msg = f"{msg} [{node_ip}] "
     show_log = False
     match level:
+        case LogLevel.DEBUG:
+            msg += "🐞 "
+            logger.debug(msg)
         case LogLevel.INFO:
             msg += "ℹ️ "
             logger.info(msg)
@@ -448,7 +452,6 @@ async def listen_for_updates(websocket, node_ip):
                 case MsgType.FOCUS_PLOT:
                     node_ui.update_focus_plot(image=soccket_message.image)
                 case MsgType.CONFIG_DATA:
-                    print(soccket_message.key, soccket_message.value)
                     node_ui.update_config_data(
                         key=soccket_message.key, value=soccket_message.value
                     )
@@ -592,6 +595,7 @@ async def set_disable(is_disable: bool, is_stop_enabled: bool):
         bt_close,
         bt_auto,
         bt_far,
+        bt_get_config,
     ]:
         ctrl.disabled = is_disable
         ctrl.update()
@@ -698,7 +702,7 @@ side_buttons = ft.Column(
         ft.Row(bt_park),
         # ft.Row(bt_capture_still),
         ft.Row(controls=[bt_move_to, dd_position]),
-        ft.Row(controls=[ft.Text("View"), dd_view]),
+        ft.Row(controls=[ft.Text("View: "), dd_view]),
         ft.Row(controls=[chk_show_log]),
         ft.Divider(),
         ft.Text("Request Focus", size=16),
@@ -793,17 +797,14 @@ async def main(page: ft.Page):
         ),
         color_scheme_seed=COLOUR_ACCENT,
     )
-    # page.theme_mode = ft.ThemeMode.LIGHT
+    page.theme_mode = ft.ThemeMode.LIGHT
     page.update()
     if page.web is False:
         await page.window.center()
     page.update()
 
     async def go_fullscreen(e: ft.Event[ft.IconButton]):
-        log(level=LogLevel.INFO, message=str(e.control.node_ip))
-        node_ui = node_uis[e.control.node_ip]
-        # if node_ui.fullscreen is True:
-        #     await page.push_route("/")
+        log(level=LogLevel.DEBUG, message=str(e.control.node_ip))
         await page.push_route(f"/{e.control.node_ip}")
 
     for nu in node_uis.values():
@@ -811,7 +812,7 @@ async def main(page: ft.Page):
 
     def route_change():
         try:
-            log(level=LogLevel.INFO, message=f"Route changed -> {page.route}")
+            log(level=LogLevel.DEBUG, message=f"Route changed -> {page.route}")
         except:
             pass
         page.views.clear()
@@ -828,7 +829,7 @@ async def main(page: ft.Page):
 
     async def view_pop(e):
         if e.view is not None:
-            log(level=LogLevel.INFO, message=f"View pop: {e.view}")
+            log(level=LogLevel.DEBUG, message=f"View pop: {e.view}")
             page.views.remove(e.view)
             top_view = page.views[-1]
             await page.push_route(top_view.route)

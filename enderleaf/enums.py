@@ -90,6 +90,7 @@ class MsgType(str, Enum):
 
 
 class LogLevel(str, Enum):
+    DEBUG = "debug"
     INFO = "info"
     WARNING = "warning"
     EXCEPTION = "exception"
@@ -99,31 +100,35 @@ class LogLevel(str, Enum):
     @staticmethod
     def log_level_to_int(log_level) -> int:
         match log_level:
-            case LogLevel.INFO:
-                return 0
-            case LogLevel.WARNING:
+            case LogLevel.DEBUG:
                 return 10
-            case LogLevel.EXCEPTION:
+            case LogLevel.INFO:
                 return 20
-            case LogLevel.ERROR:
+            case LogLevel.WARNING:
                 return 30
-            case LogLevel.CRITICAL:
+            case LogLevel.EXCEPTION:
                 return 40
+            case LogLevel.ERROR:
+                return 50
+            case LogLevel.CRITICAL:
+                return 60
             case _:
-                return -13
+                raise NotImplementedError(f"Unknown log level: {log_level}")
 
     @staticmethod
     def int_to_log_level(value: int):
         match value:
-            case 0:
-                return LogLevel.INFO
             case 10:
-                return LogLevel.WARNING
+                return LogLevel.DEBUG
             case 20:
-                return LogLevel.EXCEPTION
+                return LogLevel.INFO
             case 30:
-                return LogLevel.ERROR
+                return LogLevel.WARNING
             case 40:
+                return LogLevel.EXCEPTION
+            case 50:
+                return LogLevel.ERROR
+            case 60:
                 return LogLevel.CRITICAL
             case _:
                 raise NotImplementedError(f"Unknown log level: {value}")

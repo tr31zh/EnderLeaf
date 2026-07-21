@@ -44,6 +44,28 @@ class SocketMessage:
     @classmethod
     def load(cls, data: str):
         return cls(**json.loads(data))
+    
+
+@dataclass
+class SocketData:
+    data: dict
+
+    def to_json(self):
+        return self.data
+
+    def __str__(self) -> str:
+        return self.dump()
+
+    @classmethod
+    def from_json(cls, data: dict):
+        return cls(data)
+
+    def dump(self):
+        return json.dumps(self.to_json())
+
+    @classmethod
+    def load(cls, data: str):
+        return cls(json.loads(data))
 
 
 def result_message(result, ok_message, nok_message: str) -> SocketMessage:
