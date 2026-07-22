@@ -29,10 +29,15 @@ from enderleaf.enums import MsgType, LogLevel, ControllerCommands, NodeViewOptio
 from enderleaf.socket_message import SocketMessage
 from enderleaf.image import encode_image
 
-NUM_NODES = 4
-PORTS = [i + 8760 for i in range(NUM_NODES)]
-NODES = [f"ws://localhost:{p}" for p in PORTS]
-# NODES = [f"ws://147.100.144.150:{p}" for p in PORTS]
+LOCAL_CLIENTS = False
+if LOCAL_CLIENTS is True:
+    NUM_NODES = 4
+    PORTS = [i + 8760 for i in range(NUM_NODES)]
+    NODES = [f"ws://localhost:{p}" for p in PORTS]
+else:
+    NUM_NODES = 1
+    PORTS = [i + 8765 for i in range(NUM_NODES)]
+    NODES = [f"ws://147.100.144.150:{p}" for p in PORTS]
 BTN_HEIGHT = 40
 PATH_LOG = Path(__file__).resolve().parent.parent.joinpath("logs")
 NODE_UI_DEFAULT_WIDTH = 600
@@ -443,13 +448,14 @@ async def listen_for_updates(websocket, node_ip):
                     )
                 case MsgType.PROGRESS:
                     node_ui.update_progress(
-                        step=soccket_message.step, total=soccket_message.total
+                        step=soccket_message.step + 1, total=soccket_message.total
                     )
                 case MsgType.IMAGE:
                     node_ui.update_image(image=soccket_message.image)
                 case MsgType.POSITION_PLOT:
                     node_ui.update_position_plot(image=soccket_message.image)
                 case MsgType.FOCUS_PLOT:
+                    print("Received focus plot")
                     node_ui.update_focus_plot(image=soccket_message.image)
                 case MsgType.CONFIG_DATA:
                     node_ui.update_config_data(
@@ -508,12 +514,13 @@ async def execute_on_node(uri, func_name, **kwargs):
             await websocket.send(json.dumps(message))
             await asyncio.wait_for(
                 completion_events[uri].wait(),
-                timeout=(
-                    5
-                    if func_name
-                    in [ControllerCommands.PING, ControllerCommands.CONNECT_PRINTER]
-                    else None
-                ),
+                timeout=None,
+                # timeout=(
+                #     5
+                #     if func_name
+                #     in [ControllerCommands.PING, ControllerCommands.CONNECT_PRINTER]
+                #     else None
+                # ),
             )
     except asyncio.TimeoutError as e:
         log(
