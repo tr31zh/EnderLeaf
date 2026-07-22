@@ -14,6 +14,7 @@ from tqdm import tqdm
 import numpy as np
 import cv2
 import pandas as pd
+import albumentations as A
 
 try:
     from picamera2 import Picamera2
@@ -21,6 +22,7 @@ try:
     from picamera2.outputs import FileOutput
     from libcamera import controls
 except:
+    import random
     from enderleaf.dummy_camera import Picamera2, JpegEncoder, FileOutput
 
     simulate_camera = True
@@ -34,7 +36,7 @@ from enderscope.scan_patterns import (
     plot_discs_status,
 )
 from enderscope.bed import bed
-from enderscope.serial import list_ports, Stage
+from enderscope.async_serial import list_ports, Stage
 from enderscope.enderlights_pi import Enderlights, default_leds
 
 from enderleaf.const import FM_BREN, PRECISE_TIME_FORMAT
@@ -105,7 +107,6 @@ class EnderLeafController(object):
     # MARK: Init
     def __init__(self):
         # Camera
-        self.stop_event = Event()
         self.output = None
         self.camera = Picamera2()
         self._video_conf = self.camera.create_video_configuration(
@@ -142,6 +143,7 @@ class EnderLeafController(object):
         self._bad_discs = []
         self._ligths_cycle_index = 0
         self._px_to_mm = -1
+        self._errors = 0
         self.status = ELStatus.IDLE
 
         # Socket communication
@@ -159,8 +161,11 @@ class EnderLeafController(object):
 
     async def send_image(self, image):
         if self.socket is not None:
+            result = encode_image(
+                A.LongestMaxSize(max_size=1024, p=1)(image=image)["image"]
+            )
             await self.socket.send(
-                SocketMessage(type=MsgType.IMAGE, image=encode_image(image)).dump()
+                SocketMessage(type=MsgType.IMAGE, image=result).dump()
             )
 
     async def send_problem(self, level: LogLevel, message: str):
@@ -179,7 +184,7 @@ class EnderLeafController(object):
         if self.socket is None:
             return
         elif len(self._positions) == 0:
-            fig = plot_path_status(z=self.get_position()[2])
+            fig = plot_path_status(z=await self.get_z())
         elif len(self._good_discs) > 0 or len(self._bad_discs) > 0:
             fig = plot_discs_status(
                 path=self._positions,
@@ -187,7 +192,7 @@ class EnderLeafController(object):
                 bad_discs=self._bad_discs,
                 highlighted_indexes=index,
                 title="" if index is not None else "Discs status",
-                z=self.get_position()[2],
+                z=await self.get_z(),
             )
         else:
             fig = plot_path_status(
@@ -195,7 +200,7 @@ class EnderLeafController(object):
                 circle_diam=17,
                 highlighted_indexes=index,
                 title="",
-                z=self.get_position()[2],
+                z=await self.get_z(),
             )
 
         await self.socket.send(
@@ -207,9 +212,10 @@ class EnderLeafController(object):
     async def send_focus_plot(self, df_scores: pd.DataFrame):
         if self.socket is None:
             return
+        print("sent focus plot")
         await self.socket.send(
             SocketMessage(
-                type=MsgType.POSITION_PLOT,
+                type=MsgType.FOCUS_PLOT,
                 image=encode_image(plot_to_image(plot_focus_plt(df=df_scores))),
             ).dump()
         )
@@ -224,8 +230,7 @@ class EnderLeafController(object):
     async def send_ping_feedback(self):
         try:
             print("ping requested")
-            image, _ = await self.capture_array()
-            await self.send_image(image=image)
+            _ = await self.capture_array()
             print("image sent")
             # await self.send_data(self.to_json())
         except Exception as e:
@@ -255,6 +260,13 @@ class EnderLeafController(object):
             return False
         else:
             return True
+
+    async def send_result(self, level: LogLevel, message: str):
+        if self.socket is None:
+            return
+        await self.socket.send(
+            SocketMessage(type=MsgType.RESULT, message=message, level=level).dump()
+        )
 
     def reset(self):
         self.crop_left = 1200
@@ -325,74 +337,6 @@ class EnderLeafController(object):
             self._old_crop_values
         )
 
-    async def call_update_preview(self):
-        while True:
-            if self.stop_event.is_set() is True or self.output.closed is True:
-                break
-            if self.socket is None:
-                continue
-            with self.output.condition:
-                self.output.condition.wait()
-                # print("exited", flush=True)
-                image = cv2.cvtColor(
-                    cv2.imdecode(
-                        np.frombuffer(self.output.frame, np.uint8), cv2.IMREAD_COLOR
-                    ),
-                    cv2.COLOR_BGR2RGB,
-                )
-                cam_conf = self.camera.camera_config
-                main_width, main_height = (
-                    cam_conf["main"]["size"][0],
-                    cam_conf["main"]["size"][1],
-                )
-                raw_width, raw_height = (
-                    cam_conf["raw"]["size"][0],
-                    cam_conf["raw"]["size"][1],
-                )
-                await self.send_image(
-                    image=self.apply_image_crop(
-                        image=image,
-                        crop_data=Rectangle(
-                            top=round(self.crop_top / raw_height * main_height) & ~1,
-                            bottom=main_height
-                            - (round(self.crop_bottom / raw_height * main_height) & ~1),
-                            left=round(self.crop_left / raw_width * main_width) & ~1,
-                            right=main_width
-                            - (round(self.crop_right / raw_width * main_width) & ~1),
-                        ),
-                    )
-                )
-
-    async def dummy_call_update_preview(self):
-        while True:
-            if self.stop_event.is_set() is True or self.output.closed is True:
-                break
-            if self.socket is None:
-                continue
-            data = self.camera.read()
-            if not data:
-                break  # EOF reached
-            # Decode JPEG bytes back to image
-            image = cv2.cvtColor(
-                cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR),
-                cv2.COLOR_BGR2RGB,
-            )
-            main_width, main_height = self.camera.get_image_size("main")
-            raw_width, raw_height = self.camera.get_image_size("raw")
-            await self.send_image(
-                image=self.apply_image_crop(
-                    image=image,
-                    crop_data=Rectangle(
-                        top=round(self.crop_top / raw_height * main_height) & ~1,
-                        bottom=main_height
-                        - (round(self.crop_bottom / raw_height * main_height) & ~1),
-                        left=round(self.crop_left / raw_width * main_width) & ~1,
-                        right=main_width
-                        - (round(self.crop_right / raw_width * main_width) & ~1),
-                    ),
-                )
-            )
-
     def apply_image_crop(self, image, crop_data: Rectangle | None = None):
         crop_data = (
             Rectangle(
@@ -430,13 +374,16 @@ class EnderLeafController(object):
                     raise NotImplementedError(f"Unknown case {self.crop_mode}")
         return image
 
-    def set_crop(self, left, right, top, bottom, crop_mode: CropMode | None = None):
+    async def set_crop(
+        self, left, right, top, bottom, crop_mode: CropMode | None = None
+    ):
         self.crop_left = left
         self.crop_right = right
         self.crop_top = top
         self.crop_bottom = bottom
         if crop_mode is not None:
             self.crop_mode = crop_mode
+        await self.capture_array()
 
     def set_plate(
         self,
@@ -457,7 +404,7 @@ class EnderLeafController(object):
     def set_controls(self, control_data: dict):
         self.camera.set_controls(control_data)
 
-    async def set_exposure(self):
+    async def set_exposure(self, wait=1):
         avg_lights = self.top_lights.mean
         if avg_lights == 255:
             cam_controls = {
@@ -515,6 +462,8 @@ class EnderLeafController(object):
             cam_controls = {"AeEnable": True, "AwbEnable": True}
         self.log(LogLevel.INFO, f"New controls: {cam_controls}")
         self.set_controls(cam_controls)
+        await asyncio.sleep(wait)
+        await self.capture_array()
 
     async def set_top_lights(self, state: bool, card_points: list | None = None):
         if state is False:
@@ -527,13 +476,11 @@ class EnderLeafController(object):
 
     async def set_lights(self, lights: list, wait=1):
         self.top_lights.set_cardinals(lights)
-        await self.set_exposure()
-        await asyncio.sleep(wait)
+        await self.set_exposure(wait=wait)
 
     async def shutter(self, state: bool, wait=1):
         self.top_lights.shutter(state=state)
-        await self.set_exposure()
-        await asyncio.sleep(wait)
+        await self.set_exposure(wait=wait)
 
     async def cycle_lights(self, wait=1):
         if self._ligths_cycle_index >= LEN_LIGHTS_CONF - 1:
@@ -542,44 +489,49 @@ class EnderLeafController(object):
             self._ligths_cycle_index += 1
         self.set_lights(LIGHTS_CONF[self._ligths_cycle_index], wait=wait)
 
-    async def set_top_lights_brightness(self, brightness):
+    async def set_top_lights_brightness(self, brightness, wait=1):
         self.top_lights.brightness = brightness
+        await asyncio.sleep(wait)
+        await self.capture_array()
 
-    async def set_sensor_mode(self, sensor_mode):
-        self.camera.stop_recording()
+    async def set_sensor_mode(self, sensor_mode, wait=0.5):
         self.camera.configure(self.camera.create_video_configuration(raw=sensor_mode))
-        self.camera.start_recording(JpegEncoder(), FileOutput(self.output))
+        await asyncio.sleep(wait)
+        await self.capture_array()
 
-    async def set_focus_mode(self, focus_mode):
+    async def set_focus_mode(self, focus_mode, wait=0.5):
         self.camera.set_controls({"AfMode": focus_mode})
+        await asyncio.sleep(wait)
+        await self.capture_array()
 
-    async def set_focus_distance(self, focus_distance):
+    async def set_focus_distance(self, focus_distance, wait=0.5):
         self.camera.set_controls({"LensPosition": focus_distance})
+        await asyncio.sleep(wait)
+        await self.capture_array()
 
-    async def autofocus_cycle(self):
+    async def autofocus_cycle(self, wait=1):
         self.camera.autofocus_cycle()
         if simulate_camera is True:
             pass
         else:
             self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
+        await asyncio.sleep(wait)
+        await self.capture_array()
 
     async def set_focus_close(self):
         fc_pos = self.camera.camera_controls["LensPosition"][1]
         if self.camera.capture_metadata()["LensPosition"] != fc_pos:
             self.camera.set_controls({"LensPosition": fc_pos})
+        await self.capture_array()
 
     async def set_focus_far(self):
         ff_pos = self.camera.camera_controls["LensPosition"][0]
         if self.camera.capture_metadata()["LensPosition"] != ff_pos:
             self.camera.set_controls({"LensPosition": ff_pos})
+        await self.capture_array()
 
     async def capture_array(self):
         match self._camera_state:
-            case CameraState.VIDEO:
-                self.switch_state(CameraState.STILL)
-                image = self.camera.capture_array("main")
-                metadata = self.camera.capture_metadata()
-                self.switch_state(CameraState.VIDEO)
             case CameraState.STILL:
                 image = self.camera.capture_array("main")
                 metadata = self.camera.capture_metadata()
@@ -606,38 +558,17 @@ class EnderLeafController(object):
             metadata,
         )
 
-    async def start_video(self):
-        if self._camera_state != CameraState.VIDEO:
-            self.stop_event.clear()
-            self.camera.configure(self._video_conf)
-            self.output = StreamingOutput()
-            if simulate_camera is True:
-                pass
-            else:
-                self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
-            self.camera.start_recording(JpegEncoder(), FileOutput(self.output))
-            if simulate_camera is True:
-                self.thread = Thread(
-                    target=asyncio.run, args=(self.dummy_call_update_preview(),)
-                )
-            else:
-                self.thread = Thread(
-                    target=asyncio.run, args=(self.call_update_preview(),)
-                )
-            self.thread.start()
-            await self.set_focus_close()
-            await self.shutter(True)
-            await asyncio.sleep(0.5)
-            if self._camera_state != CameraState.SIMULATION:
-                self._camera_state = CameraState.VIDEO
+    async def capture_image(self):
+        image, _ = await self.capture_array()
+        return image
 
     async def start(self):
         if self._camera_state != CameraState.STILL:
-            self.stop_event.clear()
             self.camera.configure(self._still_conf)
-            self.output = StreamingOutput()
+            self.camera.start()
             if simulate_camera is True:
-                pass
+                self.camera.color_step_size = 5
+                self.camera.color_index = random.randint(0, 255)
             else:
                 self.camera.set_controls({"AfMode": controls.AfModeEnum.Manual})
             await self.set_focus_close()
@@ -651,10 +582,6 @@ class EnderLeafController(object):
 
     def sync_stop(self):
         if self._camera_state not in [CameraState.IDLE, CameraState.SIMULATION]:
-            self.stop_event.set()
-            self.thread.join()
-            self.camera.stop_recording()
-            self.output.close()
             self.camera.stop()
             self._camera_state = CameraState.IDLE
 
@@ -667,10 +594,6 @@ class EnderLeafController(object):
         match new_mode:
             case CameraState.IDLE:
                 await self.stop()
-            case CameraState.VIDEO:
-                if self._camera_state == CameraState.STILL:
-                    self.camera.stop()
-                await self.start_video()
             case CameraState.STILL:
                 await self.stop()
                 self.camera.switch_mode(self._still_conf)
@@ -697,32 +620,51 @@ class EnderLeafController(object):
     async def get_position(self):
         if await self.printer_ready() is False:
             return False
-        return self._stage.get_position()
+        return await self._stage.get_position()
+
+    async def get_z(self):
+        if await self.printer_ready() is False:
+            return False
+        *_, z = await self._stage.get_position()
+        return z
 
     async def finish_moves(self):
         if await self.printer_ready() is False:
             return False
-        self._stage.finish_moves()
+        await self._stage.finish_moves()
+        await self.capture_array()
 
     async def move_position(
-        self, position, index: int | None = None, update_position_plot: bool = True
+        self,
+        position,
+        index: int | None = None,
+        update_position_plot: bool = True,
+        update_preview: bool = False,
     ):
         if await self.printer_ready() is False:
             return
-        self._stage.move_position(position)
+        await self._stage.move_position(
+            position, call_back=self.capture_array if update_preview is True else None
+        )
         await self.send_position_plot(index=index)
         await self.finish_moves()
 
-    async def move_absolute(self, x, y, z):
+    async def move_absolute(self, x, y, z, update_preview: bool = False):
         if await self.printer_ready() is False:
             return
-        self._stage.move_absolute(x, y, z)
+        await self._stage.move_absolute(
+            x, y, z, call_back=self.capture_array if update_preview is True else None
+        )
         await self.finish_moves()
 
-    async def move_relative(self, x, y, z: int | None = None):
+    async def move_relative(
+        self, x, y, z: int | None = None, update_preview: bool = False
+    ):
         if await self.printer_ready() is False:
             return
-        self._stage.move_relative(x, y, z)
+        await self._stage.move_relative(
+            x, y, z, call_back=self.capture_array if update_preview is True else None
+        )
         await self.finish_moves()
 
     async def move_to(self, position: int):
@@ -730,18 +672,23 @@ class EnderLeafController(object):
             return
         position -= 1
         x, y = self._positions[position]
-        await self.move_position((x, y), index=[position])
-        self.capture_array()
+        await self.move_position((x, y), index=[position], update_preview=True)
 
     async def go_home(self):
+        await self.capture_array()
         if self.check_stage() is False:
             await self.send_problem(
                 level=LogLevel.EXCEPTION,
                 message="Unable to home, printer not connected",
             )
         try:
-            if self._stage.safe_home() is False:
-                if self._stage.safe_home() is False:
+            await self.send_message("Started homing")
+            if await self._stage.safe_home(call_back=self.capture_array) is False:
+                await self.capture_array()
+                self.send_problem(
+                    level=LogLevel.WARNING, message="Failed to home, retrying"
+                )
+                if await self._stage.safe_home(call_back=self.capture_array) is False:
                     raise ConnectionError("Unable to home")
             self._homed = True
             await self.finish_moves()
@@ -758,10 +705,18 @@ class EnderLeafController(object):
             for port in list_ports():
                 if str(port) == port_name:
                     self._stage = Stage(port, 115200)
-                    await self.go_home()
+                    if await self.go_home() is True:
+                        await self.send_message(message="Homing successful")
+                    else:
+                        return False
                     break
+            else:
+                self.send_problem(
+                    level=LogLevel.EXCEPTION,
+                    message=f"Failed to to connect to requested port: '{str(port)}'",
+                )
             x, y, _ = await self.get_position()
-            await self.move_absolute(x, y, self.focus_start_z)
+            await self.move_absolute(x, y, self.focus_start_z, update_preview=True)
         except Exception as e:
             await self.send_problem(
                 level=LogLevel.EXCEPTION,
@@ -801,51 +756,51 @@ class EnderLeafController(object):
         else:
             return True
 
-    async def get_qr_data(self, image: np.ndarray | None = None):
+    async def read_qr_data(self, image: np.ndarray | None = None):
         if image is None:
-            image = self.capture_array()[0]
+            image = await self.capture_image()
         qr_data = get_qr_data(image)
         if check_qr_code(qr_data) is False:
             old_brightness = self.top_lights.brightness
             try:
                 self.top_lights.brightness = 0.5
                 await asyncio.sleep(2)
-                qr_data = get_qr_data(self.capture_array()[0])
+                qr_data = get_qr_data(await self.capture_image())
             finally:
                 self.top_lights.brightness = old_brightness
                 await asyncio.sleep(2)
         if check_qr_code(qr_data) is False:
             try:
                 await self.shutter(False, 2)
-                qr_data = get_qr_data(self.capture_array()[0])
+                qr_data = get_qr_data(await self.capture_image())
             finally:
                 await self.shutter(True, 2)
         if check_qr_code(qr_data) is False:
             try:
                 self.set_top_lights(True, [CardPoint.NORTH])
                 await asyncio.sleep(2)
-                qr_data = get_qr_data(self.capture_array()[0])
+                qr_data = get_qr_data(await self.capture_image())
             finally:
                 await self.shutter(True, 2)
         if check_qr_code(qr_data) is False:
             try:
                 self.set_top_lights(True, [CardPoint.EAST])
                 await asyncio.sleep(2)
-                qr_data = get_qr_data(self.capture_array()[0])
+                qr_data = get_qr_data(await self.capture_image())
             finally:
                 await self.shutter(True, 2)
         if check_qr_code(qr_data) is False:
             try:
                 self.set_top_lights(True, [CardPoint.SOUTH])
                 await asyncio.sleep(2)
-                qr_data = get_qr_data(self.capture_array()[0])
+                qr_data = get_qr_data(await self.capture_image())
             finally:
                 await self.shutter(True, 2)
         if check_qr_code(qr_data) is False:
             try:
                 self.set_top_lights(True, [CardPoint.WEST])
                 await asyncio.sleep(2)
-                qr_data = get_qr_data(self.capture_array()[0])
+                qr_data = get_qr_data(await self.capture_image())
             finally:
                 await self.shutter(True, 2)
 
@@ -853,8 +808,8 @@ class EnderLeafController(object):
             self.log(LogLevel.ERROR, "Failed to read QR code")
         return qr_data
 
-    def get_qr_pos(self, image):
-        qr_data = self.get_qr_data(image)
+    async def get_qr_pos(self, image):
+        qr_data = await self.read_qr_data(image)
         if check_qr_code(qr_data) is False:
             raise ValueError("Unable to detect QR code")
         min_x, min_y, max_x, max_y = qr_data["points"][0]
@@ -876,14 +831,13 @@ class EnderLeafController(object):
             self.update_positions(self._positions)
         await self.send_position_plot(index=[0])
 
-    async def get_focused_z(self, delta_z=1, switch_state: bool = False) -> float:
+    async def get_focused_z(self, delta_z=1):
         if await self.printer_ready() is False:
             return
+        await self.send_message(message="Acquiring precise focus")
         await self.set_focus_close()
-        if switch_state is True:
-            self.switch_state(CameraState.STILL)
         z_range = np.array(range(-self.focus_delta_z, self.focus_delta_z, delta_z))
-        pos = self.get_position()
+        pos = await self.get_position()
         mxScore = -1
         bestZ = 0
         variances = {"z": []} | {fm: [] for fm in self.focus_methods}
@@ -893,7 +847,7 @@ class EnderLeafController(object):
                 [pos[0], pos[1], z + self.focus_start_z], update_position_plot=False
             )
             await asyncio.sleep(0.2)
-            img, _ = self.capture_array()
+            img = await self.capture_image()
             gray_image = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
             variances["z"].append(z + self.focus_start_z)
             for method in self.focus_methods:
@@ -904,8 +858,7 @@ class EnderLeafController(object):
             if score > mxScore:
                 mxScore = score
                 bestZ = z + self.focus_start_z
-            if self.update_progress is not None:
-                self.update_progress(i, len(z_range))
+            await self.send_progress(step=i, total=len(z_range))
         df_scores = pd.DataFrame(data=variances)
         for c in self.focus_methods:
             df_scores[c] = (df_scores[c] - df_scores[c].min()) / (
@@ -916,11 +869,8 @@ class EnderLeafController(object):
         )
 
         await self.move_position([pos[0], pos[1], bestZ], update_position_plot=False)
-
+        await self.capture_array()
         await self.send_focus_plot(df_scores=df_scores)
-
-        if switch_state is True:
-            self.switch_state(CameraState.VIDEO)
 
         return (
             df_scores[
@@ -933,117 +883,112 @@ class EnderLeafController(object):
         ), df_scores
 
     # MARK: Center On QR
-    def center_on_target(
+    async def center_on_target(
         self, target_x: float, target_y: float, current_x: float, current_y: float
     ):
-        self.move_relative(
+        await self.move_relative(
             -(target_x - current_x) * self._px_to_mm,
             (target_y - current_y) * self._px_to_mm,
             0,
         )
 
-    async def center_on_qr_code(
-        self, step_val=10, switch_state: bool = False, precise_focusing: bool = True
-    ):
+    async def center_on_qr_code(self, step_val=10, precise_focusing: bool = True):
         if await self.printer_ready() is False:
             return
-        await self.set_focus_close()
-        if switch_state is True:
-            self.switch_state(CameraState.STILL)
         await self.set_focus_close()
         await self.shutter(True)
         self.backup_crop_values()
         self._good_discs = []
         self._bad_discs = []
         try:
-            self.set_crop(0, 0, 0, 0)
-            self.move_absolute(bed.qr_start_x, bed.qr_start_y, self.focus_start_z)
-            image, _ = self.capture_array()
+            await self.set_crop(0, 0, 0, 0)
+            await self.move_absolute(
+                bed.qr_start_x, bed.qr_start_y, self.focus_start_z, update_preview=True
+            )
+            image = await self.capture_image()
             cy, cx = image.shape[0] // 2, image.shape[1] // 2
             try:
-                qr_cx, qr_cy, *_ = self.get_qr_pos(image)
+                qr_cx, qr_cy, *_ = await self.get_qr_pos(image)
             except:
-                self.get_focused_z(switch_state=False)
-                qr_cx, qr_cy, *_ = self.get_qr_pos(self.capture_array()[0])
+                await self.get_focused_z()
+                qr_cx, qr_cy, *_ = await self.get_qr_pos(await self.capture_image())
             step_x, step_y = -step_val if cx > qr_cx else step_val, (
                 step_val if cy > qr_cy else -step_val
             )
-            self.move_relative(step_x, step_y)
+            await self.move_relative(step_x, step_y)
             try:
-                new_qr_cx, new_qr_cy, *_ = self.get_qr_pos(self.capture_array()[0])
+                new_qr_cx, new_qr_cy, *_ = await self.get_qr_pos(
+                    await self.capture_image()
+                )
             except:
-                self.get_focused_z(switch_state=False)
-                new_qr_cx, new_qr_cy, *_ = self.get_qr_pos(self.capture_array()[0])
+                await self.get_focused_z()
+                new_qr_cx, new_qr_cy, *_ = await self.get_qr_pos(
+                    await self.capture_image()
+                )
 
             self._px_to_mm = 1 / (
                 (abs(qr_cx - new_qr_cx) + abs(qr_cy - new_qr_cy)) / 2 / 10
             )
 
-            self.center_on_target(
+            await self.center_on_target(
                 target_x=cx, target_y=cy, current_x=new_qr_cx, current_y=new_qr_cy
             )
-            x, y, z = self.get_position()
+            x, y, z = await self.get_position()
             if precise_focusing is True:
-                self.set_crop(0, 0, 0, 0)
-                image, _ = self.capture_array()
-                cx, cy, min_x, min_y, max_x, max_y = self.get_qr_pos(image)
-                self.set_crop(
+                await self.set_crop(0, 0, 0, 0)
+                image = await self.capture_image()
+                cx, cy, min_x, min_y, max_x, max_y = await self.get_qr_pos(image)
+                await self.set_crop(
                     top=min_y,
                     bottom=image.shape[0] - max_y,
                     left=min_x,
                     right=image.shape[1] - max_x,
                 )
-                z, _ = self.get_focused_z(switch_state=False)
-            self.build_snake(x, y)
+                z, _ = await self.get_focused_z()
+            await self.build_snake(x, y)
             return x, y, z
+        except Exception as e:
+            await self.send_problem(
+                level=LogLevel.EXCEPTION,
+                message=f"Failed to center on QR code: '{str(e)}'",
+            )
         finally:
             self.restore_crop_values()
-            if switch_state is True:
-                self.switch_state(CameraState.VIDEO)
 
-    async def check_corners(self, switch_state: bool = False):
+    async def check_corners(self):
         if await self.printer_ready() is False:
             return
         await self.set_focus_close()
-        if switch_state is True:
-            self.switch_state(CameraState.STILL)
-        x, y, z = self.center_on_qr_code(switch_state=False)
+        x, y, z = self.center_on_qr_code()
         self.build_snake(x, y)
         for position in get_extremes(self._positions):
             await self.move_position((position.x, position.y, z), index=[position.name])
-            self.capture_array()
             await asyncio.sleep(1)
         await self.move_position((x, y, z), index=[0])
-        if switch_state is True:
-            self.switch_state(CameraState.VIDEO)
 
     # MARK: Init Job
-    async def init_job(self, precise_focusing: bool = True, switch_state: bool = False):
+    async def init_job(self, precise_focusing: bool = True):
+        await self.send_message("Initializing job")
+        self._errors = 0
         if await self.printer_ready() is False:
             return
         await self.set_focus_close()
         await self.shutter(True)
-        if switch_state is True:
-            self.switch_state(CameraState.STILL)
-        x, y, z = self.center_on_qr_code(
-            switch_state=False, precise_focusing=precise_focusing
-        )
-        exp_name = self.get_qr_data(self.capture_array()[0])["info"][0].replace(
-            "_", "#"
-        )
+        x, y, z = await self.center_on_qr_code(precise_focusing=precise_focusing)
+        qr_data = await self.read_qr_data(await self.capture_image())
+        exp_name = qr_data["info"][0].replace("_", "#")
         try:
             exp, inoc, plate = exp_name.split("#")
         except:
             exp_name = "ExpXXDMXX#IX#PXX"
             exp, inoc, plate = exp_name.split("#")
-            self.log(
-                LogLevel.EXCEPTION,
-                f"Failed to detect QR code switching to default plate {plate} in experiemnt {exp}, inoc {inoc}",
+            await self.send_problem(
+                level=LogLevel.EXCEPTION,
+                message=f"Failed to detect QR code switching to default plate {plate} in experiemnt {exp}, inoc {inoc}",
             )
         else:
-            self.log(
-                LogLevel.INFO,
-                f"Detected plate {plate} in experiemnt {exp}, inoc {inoc}",
+            await self.send_message(
+                message=f"Detected plate {plate} in experiemnt {exp}, inoc {inoc}",
             )
         return exp, inoc, plate, z
 
@@ -1078,7 +1023,6 @@ class EnderLeafController(object):
     async def acquire_leaf_disc(
         self,
         light_cycle: list,
-        switch_state: bool = False,
         center_on_leaf: bool = False,
         exp_name: str | None = None,
         inoc: str | None = None,
@@ -1089,26 +1033,24 @@ class EnderLeafController(object):
         dst_folder: Path | None = None,
         z: float | None = None,
     ):
-        if switch_state is True:
-            self.switch_state(CameraState.STILL)
         cycle_id = int(format_datetime())
         file_paths = []
         images = []
         metadatas = []
         df = pd.DataFrame()
         if center_on_leaf is True:
-            image, _ = self.capture_array()
+            image = await self.capture_image()
             cy, cx = image.shape[0] // 2, image.shape[1] // 2
             circles = get_circles(image, channel="s", resize_factor=8)
             if len(circles["accepted"]) == 1:
                 _, ccx, ccy, _r = circles["accepted"][0]
-                self.center_on_target(cx, cy, ccx, ccy)
+                await self.center_on_target(cx, cy, ccx, ccy)
         for light_conf in light_cycle.value:
             if len(light_cycle.value) > 1:
-                self.set_lights(light_conf, wait=0.2)
+                await self.set_lights(light_conf, wait=0.2)
             else:
                 await asyncio.sleep(0.2)
-            image, metadata = self.capture_array()
+            image, metadata = await self.capture_array()
             images.append(image)
             if exp_name is None:
                 metadatas.append(metadata)
@@ -1161,24 +1103,24 @@ class EnderLeafController(object):
             } | extract_metadata(metadata=metadata)
             metadatas.append(metadata)
             df = pd.concat([df, pd.DataFrame(metadata)])
-        if switch_state is True:
-            self.switch_state(CameraState.VIDEO)
         return images, metadatas, file_paths, df
 
     # MARK: Launch
     async def launch_acquisition(
-        self,
-        precise_focusing: bool = True,
-        switch_state: bool = False,
-        center_on_leaf: bool = False,
+        self, precise_focusing: bool = True, center_on_leaf: bool = False
     ):
         if await self.printer_ready() is False:
             return False
         await self.set_focus_close()
         self.status = ELStatus.JOB_IN_PROGRESS
-        exp, inoc, plate, z = self.init_job(
-            precise_focusing=precise_focusing, switch_state=switch_state
-        )
+        try:
+            exp, inoc, plate, z = await self.init_job(precise_focusing=precise_focusing)
+        except Exception as e:
+            await self.send_result(
+                level=LogLevel.ERROR, message=f"Failed to initialize job: '{str(e)}'"
+            )
+            self.status = ELStatus.IDLE
+            return False
         df = pd.DataFrame()
 
         fld_images = DST_FLD.joinpath("images", exp, inoc)
@@ -1191,69 +1133,84 @@ class EnderLeafController(object):
         ).with_suffix(".csv")
         job_list = self.parse_positions()
         len_job_list = len(job_list)
+        await self.send_message("Acquiring leaf discs images")
         for idx, p, c, r in job_list:
-            await self.move_position(np.append(p, z), index=idx)
-            for cycle_id, light_cycle in enumerate(self.light_cycles):
-                if len(self.light_cycles) > 1:
-                    self.set_lights(light_cycle.value[0])
-                    await asyncio.sleep(1)
-                images, _, file_paths, df_cycle = self.acquire_leaf_disc(
-                    exp_name=exp,
-                    light_cycle=light_cycle,
-                    inoc=inoc,
-                    plate=plate,
-                    r=r,
-                    c=c,
-                    start_ts=start_ts,
-                    dst_folder=fld_images,
-                    z=z,
-                    center_on_leaf=center_on_leaf is True and cycle_id == 0,
-                )
-                df = pd.concat([df, df_cycle])
-                for file_path, image in zip(file_paths, images):
-                    try:
-                        write_ok = cv2.imwrite(
-                            str(file_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-                        )
-                    except Exception as e:
-                        self.log(
-                            kind=LogLevel.EXCEPTION,
-                            message=f"Exception '{str(e)}' wheil saving image '{str(file_path)}'",
-                        )
-                    else:
-                        if write_ok is True:
-                            self.log(
-                                kind=LogLevel.INFO, message=f"Wrote '{file_path.name}'"
+            try:
+                await self.move_position(np.append(p, z), index=idx)
+                for cycle_id, light_cycle in enumerate(self.light_cycles):
+                    if len(self.light_cycles) > 1:
+                        self.set_lights(light_cycle.value[0], wait=1)
+                    images, _, file_paths, df_cycle = await self.acquire_leaf_disc(
+                        exp_name=exp,
+                        light_cycle=light_cycle,
+                        inoc=inoc,
+                        plate=plate,
+                        r=r,
+                        c=c,
+                        start_ts=start_ts,
+                        dst_folder=fld_images,
+                        z=z,
+                        center_on_leaf=center_on_leaf is True and cycle_id == 0,
+                    )
+                    df = pd.concat([df, df_cycle])
+                    for file_path, image in zip(file_paths, images):
+                        try:
+                            write_ok = cv2.imwrite(
+                                str(file_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                            )
+                        except Exception as e:
+                            await self.send_problem(
+                                level=LogLevel.EXCEPTION,
+                                message=f"Exception '{str(e)}' wheil saving image '{str(file_path)}'",
                             )
                         else:
-                            self.log(
-                                kind=LogLevel.ERROR,
-                                message=f"FAILED to write '{file_path.name}'",
-                            )
-                if self.update_progress is not None:
-                    self.update_progress(idx, len_job_list)
-                if self.status == ELStatus.STOP_REQUESTED:
-                    break
-        write_dataframe(df, data_file_name)
+                            if write_ok is True:
+                                pass
+                            else:
+                                await self.send_problem(
+                                    level=LogLevel.EXCEPTION,
+                                    message=f"FAILED to write '{file_path.name}'",
+                                )
+                    await self.send_progress(step=idx, total=len_job_list)
+            except Exception as e:
+                await self.send_problem(
+                    level=LogLevel.EXCEPTION,
+                    message=f"Exception while acquiring C{c}, R{r}: {str(e)}",
+                )
+            if self.status == ELStatus.STOP_REQUESTED:
+                await self.send_problem(
+                    level=LogLevel.WARNING, message="Stopping process"
+                )
+                break
+
+        await self.go_rest()
+        self.status = ELStatus.IDLE
+
+        if self.status == ELStatus.STOP_REQUESTED:
+            await self.send_result(
+                level=LogLevel.WAARNING, message="User stopped process"
+            )
+        else:
+            write_dataframe(df, data_file_name)
+            if self._errors == 0:
+                await self.send_result(
+                    level=LogLevel.INFO, message="All frames processed successfully"
+                )
+            else:
+                await self.send_result(
+                    level=LogLevel.ERROR,
+                    message=f"All frames processed {self._errors} error(s) occured, see log for details",
+                )
         await self.send_position_plot()
 
-        if switch_state is True:
-            self.switch_state(CameraState.VIDEO)
-
-        self.go_rest()
-        self.status = ELStatus.IDLE
         return True
 
     # MARK: Tools
-    async def check_discs_positions(
-        self, precise_focusing: bool = False, switch_state: bool = True
-    ):
+    async def check_discs_positions(self, precise_focusing: bool = False):
         if await self.printer_ready() is False:
             return
         await self.set_focus_close()
-        *_, z = self.init_job(
-            precise_focusing=precise_focusing, switch_state=switch_state
-        )
+        *_, z = self.init_job(precise_focusing=precise_focusing)
 
         old_crop_mode = self.crop_mode
         self.crop_mode = CropMode.CROP.value
@@ -1278,13 +1235,11 @@ class EnderLeafController(object):
             await asyncio.sleep(1)
 
         self.crop_mode = old_crop_mode
-        if switch_state is True:
-            self.switch_state(CameraState.VIDEO)
 
-    def visualize_noise(
+    async def visualize_noise(
         self, image_count: int = 10, kernel_size: int = 7, focus_method: str = FM_BREN
     ) -> np.ndarray:
-        images = [self.capture_array()[0] for _ in tqdm(range(image_count))]
+        images = [await self.capture_image() for _ in tqdm(range(image_count))]
         if kernel_size > 1:
             images = [cv2.medianBlur(image, ksize=kernel_size) for image in images]
         focus_data = np.array(
@@ -1298,22 +1253,17 @@ class EnderLeafController(object):
         img_min, img_max = (images[focus_data.argmin()], images[focus_data.argmax()])
         return [img_min, img_max, np.abs(img_max - img_min)]
 
-    def test_cycle(
+    async def test_cycle(
         self,
         cycles=[LightsCycle.ONE_FOURTH],
         merge_mode=ImageMergeMode.MIN,
-        switch_state: bool = True,
         center_on_leaf: bool = True,
     ):
-        if switch_state is True:
-            self.switch_state(CameraState.STILL)
         result = []
         for i, cycle in enumerate(cycles):
-            self.set_lights(cycle.value[0], wait=1)
-            images, *_ = self.acquire_leaf_disc(
-                light_cycle=cycle,
-                switch_state=False,
-                center_on_leaf=center_on_leaf and i == 0,
+            await self.set_lights(cycle.value[0], wait=1)
+            images, *_ = await self.acquire_leaf_disc(
+                light_cycle=cycle, center_on_leaf=center_on_leaf and i == 0
             )
             if i == 0:
                 height, width, _ = images[0].shape
@@ -1334,6 +1284,4 @@ class EnderLeafController(object):
                 )
             else:
                 result.append(crop_image(images[0], crop_data))
-        if switch_state is True:
-            self.switch_state(CameraState.VIDEO)
         return result

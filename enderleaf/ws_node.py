@@ -1,6 +1,6 @@
 from pathlib import Path
 import asyncio
-import websockets
+from websockets.asyncio.server import serve
 import json
 import socket
 import random
@@ -9,27 +9,19 @@ import signal
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from enderleaf.enums import (
-    ControllerCommands,
-    MsgType,
-    LogLevel,
-    LaunchOptons,
-    CameraState,
-)
+from enderleaf.enums import ControllerCommands, MsgType, LogLevel, LaunchOptons
 from enderleaf.socket_message import SocketMessage, result_message
 from enderleaf.enderleaf_ctrl import EnderLeafController, ELStatus
-from enderscope.serial import list_ports, default_printer_port
+from enderscope.serial import default_printer_port
 
 controller = EnderLeafController()
-controller.camera.color_step_size = 5
-controller.camera.color_index = random.randint(0, 255)
-asyncio.run(controller.start())
 
 
 def sigint_handler(sig, frame):
     print("")
     print("Stopping node")
     controller.sync_stop()
+
     print("Controller stopped")
     sys.exit(0)
 
@@ -58,12 +50,6 @@ async def node_connect_printer(websocket, **kwargs):
 
 async def node_ping(websocket, **kwargs):
     controller.socket = websocket
-    await websocket.send(
-        SocketMessage(
-            type=MsgType.RESULT,
-            message="Ping in progress. No other operation is allowed",
-        ).dump()
-    )
     await websocket.send(
         result_message(
             result=await controller.send_ping_feedback(),
@@ -126,18 +112,12 @@ async def node_go_idle(websocket, **kwargs):
 
 async def node_start(websocket, **kwargs):
     controller.socket = websocket
-    launch_options = kwargs.get("launch_options", [])
-
-    await websocket.send(
-        result_message(
-            result=await controller.launch_acquisition(
-                precise_focusing=LaunchOptons.PRECISE_FOCUS in launch_options,
-                switch_state=LaunchOptons.SWITCH_STATE in launch_options,
-                center_on_leaf=LaunchOptons.CENTER_OL in launch_options,
-            ),
-            ok_message="All leaf discs processed",
-            nok_message="Error while processing leaf discs",
-        ).dump()
+    launch_options = kwargs.get(
+        "launch_options", [LaunchOptons.PRECISE_FOCUS, LaunchOptons.CENTER_OL]
+    )
+    await controller.launch_acquisition(
+        precise_focusing=LaunchOptons.PRECISE_FOCUS in launch_options,
+        center_on_leaf=LaunchOptons.CENTER_OL in launch_options,
     )
 
 
@@ -312,8 +292,11 @@ async def handler(websocket):
 async def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     host = "0.0.0.0"
-    print(socket.gethostname())
-    async with websockets.serve(handler, host, port):
+    print(f"Starting node on :{socket.gethostname()}")
+    print("Starting camera")
+    await controller.start()
+    print("Starting websocket")
+    async with serve(handler, host, port, max_size=None):
         print(
             f"Node server running on {host}:{port} (Hostname: {socket.gethostname()})"
         )

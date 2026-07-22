@@ -192,11 +192,12 @@ def plot_focus_plotly(df, width: int = 400):
     fig.update_layout(hovermode="x unified")
     return fig
 
+
 def plot_focus_plt(df, width: int = 200):
     df_melted = pd.melt(df, id_vars=["z"])
     fig = Figure(figsize=(4, 4))
     ax = fig.subplots(nrows=1, ncols=1)
-    return sns.lineplot(
+    sns.lineplot(
         data=df_melted,
         x="z",
         y="value",
