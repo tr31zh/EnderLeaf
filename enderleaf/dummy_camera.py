@@ -79,6 +79,12 @@ class Picamera2(io.BufferedIOBase):
         self.stop_event = Event()
         self.camera_controls = {"LensPosition": (0, 15, 1)}
 
+    def start(self):
+        pass
+
+    def autofocus_cycle(self):
+        pass
+
     def write(self, data: bytes) -> int:
         """Producer calls this. Blocks if buffer is full."""
         if self._closed:

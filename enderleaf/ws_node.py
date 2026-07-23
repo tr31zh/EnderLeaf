@@ -139,25 +139,34 @@ async def node_capture_still(websocket, **kwargs):
 
 async def node_request_focus(websocket, **kwargs):
     controller.socket = websocket
-    await controller.autofocus_cycle()
     await websocket.send(
-        SocketMessage(type=MsgType.RESULT, message="Focus acquired").dump()
+        result_message(
+            result=await controller.autofocus_cycle(),
+            ok_message="Focus acquired",
+            nok_message="Focus failed",
+        ).dump()
     )
 
 
 async def node_request_focus_close(websocket, **kwargs):
     controller.socket = websocket
-    await controller.set_focus_close()
     await websocket.send(
-        SocketMessage(type=MsgType.RESULT, message="Close focus set").dump()
+        result_message(
+            result=await controller.set_focus_close(),
+            ok_message="Focused close",
+            nok_message="Focus close failed",
+        ).dump()
     )
 
 
 async def node_request_focus_far(websocket, **kwargs):
     controller.socket = websocket
-    await controller.set_focus_far()
     await websocket.send(
-        SocketMessage(type=MsgType.RESULT, message="Far focus set").dump()
+        result_message(
+            result=await controller.set_focus_far(),
+            ok_message="Focused far",
+            nok_message="Focus far failed",
+        ).dump()
     )
 
 
@@ -239,9 +248,9 @@ FUNCTION_REGISTRY = {
     ControllerCommands.STOP: node_stop,
     ControllerCommands.PING: node_ping,
     ControllerCommands.CAPTURE_STILL: node_capture_still,
-    ControllerCommands.AUTO: node_request_focus,
-    ControllerCommands.CLOSE: node_request_focus_close,
-    ControllerCommands.FAR: node_request_focus_far,
+    ControllerCommands.FOCUS_AUTO: node_request_focus,
+    ControllerCommands.FOCUS_CLOSE: node_request_focus_close,
+    ControllerCommands.FOCUS_FAR: node_request_focus_far,
     ControllerCommands.CONNECT_PRINTER: node_connect_printer,
     ControllerCommands.GO_HOME: node_go_home,
     ControllerCommands.GO_IDLE: node_go_idle,

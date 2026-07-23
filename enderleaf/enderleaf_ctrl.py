@@ -8,6 +8,7 @@ from functools import wraps
 from timeit import default_timer as timer
 import io
 import asyncio
+from functools import wraps
 
 from tqdm import tqdm
 
@@ -89,6 +90,23 @@ def extract_metadata(metadata):
         ]
     } | {"GainRed": metadata["ColourGains"][0], "GainBlue": metadata["ColourGains"][1]}
     return dict(sorted({k: [v] for k, v in data.items()}.items()))
+
+
+def maybe_method(method):
+    @wraps(method)
+    async def _impl(self, *method_args, **method_kwargs):
+        try:
+            method_output = await method(self, *method_args, **method_kwargs)
+        except Exception as e:
+            await self.send_problem(
+                level=LogLevel.EXCEPTION,
+                message=f"{method.__name__} failed because '{str(e)}'",
+            )
+            return False
+        else:
+            return method_output
+
+    return _impl
 
 
 def plot_to_image(fig):
@@ -212,7 +230,6 @@ class EnderLeafController(object):
     async def send_focus_plot(self, df_scores: pd.DataFrame):
         if self.socket is None:
             return
-        print("sent focus plot")
         await self.socket.send(
             SocketMessage(
                 type=MsgType.FOCUS_PLOT,
@@ -229,10 +246,7 @@ class EnderLeafController(object):
 
     async def send_ping_feedback(self):
         try:
-            print("ping requested")
             _ = await self.capture_array()
-            print("image sent")
-            # await self.send_data(self.to_json())
         except Exception as e:
             await self.send_problem(
                 level=LogLevel.EXCEPTION, message=f"Ping failed: {str(e)}"
@@ -509,6 +523,7 @@ class EnderLeafController(object):
         await asyncio.sleep(wait)
         await self.capture_array()
 
+    @maybe_method
     async def autofocus_cycle(self, wait=1):
         self.camera.autofocus_cycle()
         if simulate_camera is True:
@@ -518,12 +533,14 @@ class EnderLeafController(object):
         await asyncio.sleep(wait)
         await self.capture_array()
 
+    @maybe_method
     async def set_focus_close(self):
         fc_pos = self.camera.camera_controls["LensPosition"][1]
         if self.camera.capture_metadata()["LensPosition"] != fc_pos:
             self.camera.set_controls({"LensPosition": fc_pos})
         await self.capture_array()
 
+    @maybe_method
     async def set_focus_far(self):
         ff_pos = self.camera.camera_controls["LensPosition"][0]
         if self.camera.capture_metadata()["LensPosition"] != ff_pos:

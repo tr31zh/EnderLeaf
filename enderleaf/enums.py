@@ -145,23 +145,28 @@ class ControllerCommands(str, Enum):
     STOP = "stop"
     PING = "ping"
     CAPTURE_STILL = "capture_still"
-    AUTO = "auto"
-    CLOSE = "close"
-    FAR = "far"
+    FOCUS_AUTO = "autofocus"
+    FOCUS_CLOSE = "focus_close"
+    FOCUS_FAR = "focus_far"
     CONNECT_PRINTER = "connect_printer"
     GO_HOME = "go_home"
     GO_IDLE = "go_idle"
     GO_PARK = "go_park"
-    CENTER_ON_QR_CODE = "center_on_qr_code"
+    CENTER_ON_QR_CODE = "center_on_QR_code"
     CHECK_CORNERS = "check_corners"
     TOGGLE_LIGHTS = "toggle_lights"
     CYCLE_LIGHTS = "cycle_lights"
     MOVE_TO = "move_to"
     GET_CONFIG = "GET_CONFIG".lower()
 
+    @staticmethod
+    def display_name(command)->str:
+        result = command.value
+        result = result[0].capitalize() + result[1:]
+        return result.replace("_", " ")
 
 class NodeViewOption(str, Enum):
     IMAGE = "Image"
-    PLOT_POSITION = "Position Plot"
-    PLOT_FOCUS = "Focus Plot"
+    PLOT_POSITION = "Position"
+    PLOT_FOCUS = "Focus"
     CONFIG = "Config"

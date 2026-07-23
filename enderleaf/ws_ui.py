@@ -29,7 +29,7 @@ from enderleaf.enums import MsgType, LogLevel, ControllerCommands, NodeViewOptio
 from enderleaf.socket_message import SocketMessage
 from enderleaf.image import encode_image
 
-LOCAL_CLIENTS = False
+LOCAL_CLIENTS = True
 if LOCAL_CLIENTS is True:
     NUM_NODES = 4
     PORTS = [i + 8760 for i in range(NUM_NODES)]
@@ -38,15 +38,14 @@ else:
     NUM_NODES = 1
     PORTS = [i + 8765 for i in range(NUM_NODES)]
     NODES = [f"ws://147.100.144.150:{p}" for p in PORTS]
+
+BORDER_RADIUS = 6
 BTN_HEIGHT = 40
 PATH_LOG = Path(__file__).resolve().parent.parent.joinpath("logs")
-NODE_UI_DEFAULT_WIDTH = 600
-
 COLOUR_ACCENT = ft.Colors.GREEN_100
 FULLSCREEN_COLOUR_ACCENT = ft.Colors.BLUE_100
 COLOUR_BACKGROUND = ft.Colors.SURFACE_CONTAINER_HIGH
 COLOUR_DETAIL = ft.Colors.GREY_600
-
 
 completion_events = {uri: asyncio.Event() for uri in NODES}
 
@@ -70,7 +69,12 @@ class MemoryFilter(logging.Filter):
 
 
 log_view = ft.ListView(
-    spacing=10, padding=20, auto_scroll=True, expand=1, visible=False, auto_scroll_animation=0
+    spacing=10,
+    padding=20,
+    auto_scroll=True,
+    expand=1,
+    visible=False,
+    auto_scroll_animation=0,
 )
 
 
@@ -99,7 +103,9 @@ def level_to_color(level: LogLevel | int):
         case _:
             return None
 
+
 logging.DEBUG
+
 
 def log(level, message: str, node_ip: str | None = None):
     msg = f"{dt.now().strftime(DEFAULT_DATETIME_FORMAT)} | "
@@ -220,7 +226,7 @@ class ConfUnit:
 
 
 class NodeUi:
-    def __init__(self, node_ip, max_width: int = NODE_UI_DEFAULT_WIDTH):
+    def __init__(self, node_ip):
         self.node_ip = node_ip
         self.title = ft.Checkbox(
             label=node_ip,
@@ -270,7 +276,7 @@ class NodeUi:
                 ft.Tab(label=NodeViewOption.PLOT_FOCUS.value),
                 ft.Tab(label=NodeViewOption.CONFIG.value),
             ],
-            visible=False,
+            # visible=False,
             scrollable=False,
         )
         self.tab_bar_view = ft.TabBarView(
@@ -293,7 +299,6 @@ class NodeUi:
         self.expand_toggle.node_ip = self.node_ip
         self.progress = ft.ProgressBar(value=0, bar_height=10, expand=False, height=12)
         self.alert = ft.Text(value="Ready", expand=False)
-        self.max_width = max_width
         self._fullscreen = False
 
         self._ui = ft.Container(
@@ -311,7 +316,7 @@ class NodeUi:
             ),
             bgcolor=COLOUR_BACKGROUND,
             border=ft.Border.all(2, COLOUR_DETAIL),
-            border_radius=10,
+            border_radius=BORDER_RADIUS,
             padding=4,
             expand=1,
         )
@@ -364,12 +369,6 @@ class NodeUi:
         )
         self.ui.update()
 
-    def update_size(self, new_size):
-        self.max_width = new_size
-        self._ui.width = new_size
-        for control in [self.title, self.image, self.progress, self.alert]:
-            control.update()
-
     def update_alert(self, log_level: LogLevel, message: str):
         self.max_level = max(self.max_level, LogLevel.log_level_to_int(log_level))
         self.alert.value = message
@@ -414,7 +413,7 @@ class NodeUi:
             )
 
 
-node_uis = {k: NodeUi(k, max_width=NODE_UI_DEFAULT_WIDTH) for k in NODES}
+node_uis = {k: NodeUi(k) for k in NODES}
 
 
 def fullscreen_node() -> NodeUi | None:
@@ -603,6 +602,10 @@ async def set_disable(is_disable: bool, is_stop_enabled: bool):
         bt_auto,
         bt_far,
         bt_get_config,
+        bt_center_on_qr_code,
+        bt_check_corners,
+        bt_toggle_lights,
+        bt_cycle_lights,
     ]:
         ctrl.disabled = is_disable
         ctrl.update()
@@ -626,44 +629,71 @@ async def on_nodes_view_changed(e: ft.Event[ft.Dropdown]):
         await node_ui.switch_main_view(e.control.value)
 
 
+def get_side_bar_button(command, icon=None, disabled=False):
+    return EnderButton(
+        content=ControllerCommands.display_name(command),
+        on_click=on_run_task,
+        icon=icon,
+    )
+
+
 bt_connect_printer = ft.FilledButton(
-    content="Connect Printer",
+    content=ControllerCommands.display_name(ControllerCommands.CONNECT_PRINTER),
     on_click=on_run_task,
     icon=ft.Icons.INSERT_LINK,
     expand=True,
     height=BTN_HEIGHT,
 )
-bt_ping = EnderButton(content="Ping", on_click=on_run_task, icon=ft.Icons.NETWORK_PING)
-bt_get_config = EnderButton(
-    content="Get config", on_click=on_run_task, icon=ft.Icons.SETTINGS_ROUNDED
+bt_ping = get_side_bar_button(
+    command=ControllerCommands.PING, icon=ft.Icons.NETWORK_PING
+)
+bt_get_config = get_side_bar_button(
+    ControllerCommands.GET_CONFIG, icon=ft.Icons.SETTINGS_ROUNDED
 )
 # bt_capture_still = EnderButton(
-#     content="Capture still", on_click=on_run_task, icon=ft.Icons.ADD_A_PHOTO_SHARP
+#     content=ControllerCommands.display_name(ControllerCommands.CAPTURE_STILL),
+#     on_click=on_run_task,
+#     icon=ft.Icons.ADD_A_PHOTO_SHARP,
 # )
-bt_home = EnderButton(content="Go Home", on_click=on_run_task, icon=ft.Icons.HOME)
-bt_idle = EnderButton(
-    content="Go Idle",
-    on_click=on_run_task,
+bt_home = get_side_bar_button(ControllerCommands.GO_HOME, icon=ft.Icons.HOME)
+bt_idle = get_side_bar_button(
+    ControllerCommands.GO_IDLE,
     icon=ft.Icons.AIRLINE_SEAT_INDIVIDUAL_SUITE_OUTLINED,
 )
-bt_park = EnderButton(
-    content="Go Park", on_click=on_run_task, icon=ft.Icons.LOCAL_PARKING
-)
+bt_park = get_side_bar_button(ControllerCommands.GO_PARK, icon=ft.Icons.LOCAL_PARKING)
 bt_launch = ft.FilledButton(
-    content="Start",
+    content=ControllerCommands.display_name(ControllerCommands.START),
     expand=True,
     on_click=on_run_task,
     icon=ft.Icons.PLAY_ARROW_SHARP,
     height=BTN_HEIGHT,
 )
-bt_stop = EnderButton(
-    content="Stop", on_click=on_run_task, icon=ft.Icons.STOP, disabled=True
+bt_stop = get_side_bar_button(
+    ControllerCommands.STOP, icon=ft.Icons.STOP, disabled=True
 )
-bt_move_to = EnderButton(
-    content="Move to",
-    on_click=on_run_task,
-    icon=ft.Icons.ARROW_CIRCLE_RIGHT_OUTLINED,
+bt_move_to = get_side_bar_button(
+    ControllerCommands.MOVE_TO, icon=ft.Icons.ARROW_CIRCLE_RIGHT_OUTLINED
 )
+bt_center_on_qr_code = get_side_bar_button(
+    command=ControllerCommands.CENTER_ON_QR_CODE, icon=ft.Icons.QR_CODE_SCANNER
+)
+bt_check_corners = get_side_bar_button(
+    command=ControllerCommands.CHECK_CORNERS, icon=ft.Icons.ALL_OUT
+)
+bt_toggle_lights = get_side_bar_button(
+    command=ControllerCommands.TOGGLE_LIGHTS, icon=ft.Icons.LIGHT_MODE
+)
+bt_cycle_lights = get_side_bar_button(
+    command=ControllerCommands.CYCLE_LIGHTS, icon=ft.Icons.AUTORENEW
+)
+bt_close = get_side_bar_button(
+    ControllerCommands.FOCUS_CLOSE, icon=ft.Icons.CENTER_FOCUS_STRONG_ROUNDED
+)
+bt_auto = get_side_bar_button(ControllerCommands.FOCUS_AUTO, icon=ft.Icons.AUTO_AWESOME)
+bt_far = get_side_bar_button(
+    ControllerCommands.FOCUS_FAR, icon=ft.Icons.FILTER_CENTER_FOCUS_ROUNDED
+)
+
 dd_position = ft.Dropdown(
     options=[ft.DropdownOption(key=i, content=ft.Text(i)) for i in range(78)]
 )
@@ -683,19 +713,40 @@ dd_view = ft.Dropdown(
     on_select=on_nodes_view_changed,
 )
 
-
-bt_close = EnderButton(content="Close", on_click=on_run_task)
-bt_auto = EnderButton(content="Auto", on_click=on_run_task)
-bt_far = EnderButton(content="Far", on_click=on_run_task)
+ep_extra_controls = ft.ExpansionTile(
+    title=ft.Text("Extra controls"),
+    controls_padding=ft.Padding.symmetric(horizontal=10, vertical=10),
+    affinity=ft.TileAffinity.PLATFORM,
+    maintain_state=True,
+    shape=ft.RoundedRectangleBorder(side=ft.BorderSide(width=1), radius=BORDER_RADIUS),
+    collapsed_shape=ft.RoundedRectangleBorder(
+        side=ft.BorderSide(width=1), radius=BORDER_RADIUS
+    ),
+    controls=ft.Column(
+        controls=[
+            ft.Row(bt_center_on_qr_code),
+            ft.Row(bt_check_corners),
+            ft.Row(controls=[bt_move_to, dd_position]),
+            ft.Row(bt_toggle_lights),
+            ft.Row(bt_cycle_lights),
+            ft.Row(bt_get_config),
+            ft.Row(bt_auto, expand=True),
+            ft.Row(bt_close, expand=True),
+            ft.Row(bt_far, expand=True),
+        ],
+        expand=True,
+        intrinsic_width=True,
+    ),
+)
 
 gv_nodes = ft.GridView(
     spacing=10,
-    max_extent=NODE_UI_DEFAULT_WIDTH,
     scroll=ft.ScrollMode.ALWAYS,
     expand=True,
     controls=[nu.ui for nu in node_uis.values()],
     horizontal=True,
-    child_aspect_ratio=0.9,
+    child_aspect_ratio=0.85,
+    runs_count=min(NUM_NODES, 2),
 )
 
 side_buttons = ft.Column(
@@ -703,22 +754,17 @@ side_buttons = ft.Column(
     controls=[
         ft.Row(bt_connect_printer),
         ft.Row(bt_ping),
-        ft.Row(bt_get_config),
         ft.Row(bt_home),
         ft.Row(bt_idle),
         ft.Row(bt_park),
-        # ft.Row(bt_capture_still),
-        ft.Row(controls=[bt_move_to, dd_position]),
         ft.Row(controls=[ft.Text("View: "), dd_view]),
         ft.Row(controls=[chk_show_log]),
-        ft.Divider(),
-        ft.Text("Request Focus", size=16),
-        ft.Row([bt_close, bt_auto, bt_far]),
-        ft.Divider(),
+        ep_extra_controls,
         ft.Text("Acquisition Job", size=16),
         ft.Row([bt_launch, bt_stop]),
     ],
     auto_scroll=True,
+    scroll=ft.ScrollMode.ADAPTIVE,
 )
 
 

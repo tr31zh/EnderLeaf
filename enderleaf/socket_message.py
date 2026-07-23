@@ -71,6 +71,6 @@ class SocketData:
 def result_message(result, ok_message, nok_message: str) -> SocketMessage:
     return SocketMessage(
         type=MsgType.RESULT,
-        message=(ok_message if result is True else nok_message),
-        level=LogLevel.INFO if result is True else LogLevel.ERROR,
+        message=(nok_message if result is False else ok_message),
+        level=LogLevel.ERROR if result is False else LogLevel.INFO,
     )
