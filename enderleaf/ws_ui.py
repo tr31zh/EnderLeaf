@@ -29,15 +29,14 @@ from enderleaf.enums import MsgType, LogLevel, ControllerCommands, NodeViewOptio
 from enderleaf.socket_message import SocketMessage
 from enderleaf.image import encode_image
 
-LOCAL_CLIENTS = True
+LOCAL_CLIENTS = False
 if LOCAL_CLIENTS is True:
     NUM_NODES = 4
     PORTS = [i + 8760 for i in range(NUM_NODES)]
     NODES = [f"ws://localhost:{p}" for p in PORTS]
 else:
-    NUM_NODES = 1
-    PORTS = [i + 8765 for i in range(NUM_NODES)]
-    NODES = [f"ws://147.100.144.150:{p}" for p in PORTS]
+    IPS = ["ws://147.100.144.150","ws://147.100.144.195"]
+    NODES = [f"{ip}:8765" for ip in IPS]
 
 BORDER_RADIUS = 6
 BTN_HEIGHT = 40
@@ -746,7 +745,7 @@ gv_nodes = ft.GridView(
     controls=[nu.ui for nu in node_uis.values()],
     horizontal=True,
     child_aspect_ratio=0.85,
-    runs_count=min(NUM_NODES, 2),
+    runs_count=min(len(NODES), 2),
 )
 
 side_buttons = ft.Column(
