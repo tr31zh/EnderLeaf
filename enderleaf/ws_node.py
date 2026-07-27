@@ -216,7 +216,7 @@ async def node_check_corners(websocket, **kwargs):
 
 async def node_toggle_lights(websocket, **kwargs):
     controller.socket = websocket
-    await controller.controller.shutter(controller.top_lights.mean == 0)
+    await controller.shutter(controller.top_lights.mean == 0)
     await websocket.send(
         SocketMessage(type=MsgType.RESULT, message="Lights togled").dump()
     )
