@@ -3,4 +3,4 @@
 cd /home/ender/code/EnderLeaf
 source .venv/bin/activate
 cd enderleaf
-flet run ws_ui.py
+flet run --web ws_ui.py
