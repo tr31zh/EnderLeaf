@@ -65,6 +65,8 @@ DEFAULT_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_DATE_FORMAT = "%Y-%m-%d"
 DEFAULT_TIME_FORMAT = "%H:%M:%S"
 
+MIN_HD_SPACE = 8
+
 # MARK: Focus methods
 FM_BREN = "BREN"
 FM_FFTE = "FFTE"

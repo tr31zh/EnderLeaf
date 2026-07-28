@@ -1,6 +1,7 @@
 from pathlib import Path
 from timeit import default_timer as timer
 from datetime import datetime as dt
+import psutil
 
 import pandas as pd
 
@@ -88,3 +89,7 @@ def write_dataframe(df: pd.DataFrame, path: Path, sep: str = ";") -> pd.DataFram
     ensure_folder(path.parent)
     df.to_csv(path_or_buf=path, sep=sep, index=False)
     return df
+
+
+def get_available_hd():
+    return psutil.disk_usage(".").free / 1024**3

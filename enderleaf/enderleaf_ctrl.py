@@ -40,7 +40,7 @@ from enderscope.bed import bed
 from enderscope.async_serial import list_ports, Stage
 from enderscope.enderlights_pi import Enderlights, default_leds
 
-from enderleaf.const import FM_BREN, PRECISE_TIME_FORMAT
+from enderleaf.const import FM_BREN, PRECISE_TIME_FORMAT, MIN_HD_SPACE
 from enderleaf.enums import (
     CameraState,
     CropMode,
@@ -55,7 +55,13 @@ from enderleaf.enums import (
 from enderleaf.socket_message import SocketMessage
 from enderleaf.streaming import StreamingOutput
 from enderleaf.focus_metrics import compute_focus_metric
-from enderleaf.tools import ensure_folder, format_datetime, write_dataframe, format_time
+from enderleaf.tools import (
+    ensure_folder,
+    format_datetime,
+    write_dataframe,
+    format_time,
+    get_available_hd,
+)
 from enderleaf.image import (
     crop_image,
     Rectangle,
@@ -64,7 +70,7 @@ from enderleaf.image import (
     ImageMergeMode,
     encode_image,
 )
-from enderleaf.qr_reader import get_qr_data, check_qr_code
+from enderleaf.qr_reader import get_qr_data, check_qr_code, empty_qr
 from enderleaf.draw import draw_circles, plot_focus_plt
 
 logger = logger = logging.getLogger(__name__)
@@ -179,11 +185,15 @@ class EnderLeafController(object):
 
     async def send_image(self, image):
         if self.socket is not None:
-            result = encode_image(
-                A.LongestMaxSize(max_size=1024, p=1)(image=image)["image"]
-            )
             await self.socket.send(
-                SocketMessage(type=MsgType.IMAGE, image=result).dump()
+                SocketMessage(
+                    type=MsgType.IMAGE,
+                    image=encode_image(
+                        A.LongestMaxSize(max_size=1024, p=1)(
+                            image=cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                        )["image"]
+                    ),
+                ).dump()
             )
 
     async def send_problem(self, level: LogLevel, message: str):
@@ -773,61 +783,74 @@ class EnderLeafController(object):
         else:
             return True
 
-    async def read_qr_data(self, image: np.ndarray | None = None):
+    async def read_qr_data(
+        self, image: np.ndarray | None = None, need_info: bool = True
+    ):
         if image is None:
             image = await self.capture_image()
-        qr_data = get_qr_data(image)
-        if check_qr_code(qr_data) is False:
-            old_brightness = self.top_lights.brightness
-            try:
-                self.top_lights.brightness = 0.5
-                await asyncio.sleep(2)
-                qr_data = get_qr_data(await self.capture_image())
-            finally:
-                self.top_lights.brightness = old_brightness
-                await asyncio.sleep(2)
-        if check_qr_code(qr_data) is False:
-            try:
-                await self.shutter(False, 2)
-                qr_data = get_qr_data(await self.capture_image())
-            finally:
-                await self.shutter(True, 2)
-        if check_qr_code(qr_data) is False:
-            try:
-                self.set_top_lights(True, [CardPoint.NORTH])
-                await asyncio.sleep(2)
-                qr_data = get_qr_data(await self.capture_image())
-            finally:
-                await self.shutter(True, 2)
-        if check_qr_code(qr_data) is False:
-            try:
-                self.set_top_lights(True, [CardPoint.EAST])
-                await asyncio.sleep(2)
-                qr_data = get_qr_data(await self.capture_image())
-            finally:
-                await self.shutter(True, 2)
-        if check_qr_code(qr_data) is False:
-            try:
-                self.set_top_lights(True, [CardPoint.SOUTH])
-                await asyncio.sleep(2)
-                qr_data = get_qr_data(await self.capture_image())
-            finally:
-                await self.shutter(True, 2)
-        if check_qr_code(qr_data) is False:
-            try:
-                self.set_top_lights(True, [CardPoint.WEST])
-                await asyncio.sleep(2)
-                qr_data = get_qr_data(await self.capture_image())
-            finally:
-                await self.shutter(True, 2)
+        qr_data = await get_qr_data(
+            image, call_back=self.send_problem, need_info=need_info
+        )
 
-        if check_qr_code(qr_data) is False:
-            self.log(LogLevel.ERROR, "Failed to read QR code")
+        async def try_qr_code(message: str, brightness: float | None = None):
+            try:
+                await self.send_problem(level=LogLevel.WARNING, message=message)
+                await asyncio.sleep(2)
+                return await get_qr_data(
+                    await self.capture_image(),
+                    call_back=self.send_problem,
+                    need_info=need_info,
+                )
+            except:
+                pass
+            finally:
+                if brightness is None:
+                    await self.shutter(True, 2)
+                else:
+                    self.top_lights.brightness = old_brightness
+                await asyncio.sleep(2)
+
+        if check_qr_code(qr_data, need_info=need_info) is False:
+            old_brightness = self.top_lights.brightness
+            self.top_lights.brightness = 0.5
+            qr_data = await try_qr_code(
+                "QR code detection failed, tryng with half brtightness",
+                brightness=old_brightness,
+            )
+        if check_qr_code(qr_data, need_info=need_info) is False:
+            await self.shutter(False, 2)
+            qr_data = await try_qr_code("QR code detection failed, tryng with LEDs off")
+        if check_qr_code(qr_data, need_info=need_info) is False:
+            self.set_top_lights(True, [CardPoint.NORTH])
+            qr_data = await try_qr_code(
+                "QR code detection failed, tryng with north light"
+            )
+        if check_qr_code(qr_data, need_info=need_info) is False:
+            self.set_top_lights(True, [CardPoint.EAST])
+            qr_data = await try_qr_code(
+                "QR code detection failed, tryng with east light"
+            )
+        if check_qr_code(qr_data, need_info=need_info) is False:
+            self.set_top_lights(True, [CardPoint.SOUTH])
+            qr_data = await try_qr_code(
+                "QR code detection failed, tryng with south light"
+            )
+        if check_qr_code(qr_data, need_info=need_info) is False:
+            self.set_top_lights(True, [CardPoint.WEST])
+            qr_data = await try_qr_code(
+                "QR code detection failed, tryng with west light"
+            )
+
+        if check_qr_code(qr_data, need_info=need_info) is False:
+            await self.send_problem(
+                level=LogLevel.ERROR, message="Failed to read QR code"
+            )
+            qr_data = empty_qr()
         return qr_data
 
     async def get_qr_pos(self, image):
-        qr_data = await self.read_qr_data(image)
-        if check_qr_code(qr_data) is False:
+        qr_data = await self.read_qr_data(image, need_info=False)
+        if check_qr_code(qr_data, need_info=False) is False:
             raise ValueError("Unable to detect QR code")
         min_x, min_y, max_x, max_y = qr_data["points"][0]
         return (min_x + max_x) // 2, (min_y + max_y) // 2, min_x, min_y, max_x, max_y
@@ -992,7 +1015,7 @@ class EnderLeafController(object):
         await self.set_focus_close()
         await self.shutter(True)
         x, y, z = await self.center_on_qr_code(precise_focusing=precise_focusing)
-        qr_data = await self.read_qr_data(await self.capture_image())
+        qr_data = await self.read_qr_data(await self.capture_image(), need_info=True)
         exp_name = qr_data["info"][0].replace("_", "#")
         try:
             exp, inoc, plate = exp_name.split("#")
@@ -1127,7 +1150,19 @@ class EnderLeafController(object):
         self, precise_focusing: bool = True, center_on_leaf: bool = False
     ):
         if await self.printer_ready() is False:
+            await self.send_result(
+                level=LogLevel.ERROR, message=f"Please connect printer."
+            )
             return False
+
+        remaining_sapce = get_available_hd()
+        if remaining_sapce < MIN_HD_SPACE:
+            await self.send_result(
+                level=LogLevel.CRITICAL,
+                message=f"Only {remaining_sapce:.2f}Gb remaining, at least {MIN_HD_SPACE}Gb needed. Unable to start acquisitions. Please empty drive.",
+            )
+            return False
+
         await self.set_focus_close()
         self.status = ELStatus.JOB_IN_PROGRESS
         try:
@@ -1203,20 +1238,29 @@ class EnderLeafController(object):
         await self.go_rest()
         self.status = ELStatus.IDLE
 
+        remaining_sapce = get_available_hd()
+        if remaining_sapce < MIN_HD_SPACE:
+            await self.send_problem(
+                level=LogLevel.EXCEPTION,
+                message=f"Only {remaining_sapce:.2f}Gb remaining. Please empty drive before next acquisition.",
+            )
+
         if self.status == ELStatus.STOP_REQUESTED:
             await self.send_result(
-                level=LogLevel.WAARNING, message="User stopped process"
+                level=LogLevel.WAARNING,
+                message=f"User stopped process. {remaining_sapce:.2f}Gb remaining in drive",
             )
         else:
             write_dataframe(df, data_file_name)
             if self._errors == 0:
                 await self.send_result(
-                    level=LogLevel.INFO, message="All frames processed successfully"
+                    level=LogLevel.INFO,
+                    message=f"All frames processed successfully. {remaining_sapce:.2f}Gb remaining in drive",
                 )
             else:
                 await self.send_result(
                     level=LogLevel.ERROR,
-                    message=f"All frames processed {self._errors} error(s) occured, see log for details",
+                    message=f"All frames processed {self._errors} error(s) occured, see log for details. {remaining_sapce:.2f}Gb remaining in drive",
                 )
         await self.send_position_plot()
 
