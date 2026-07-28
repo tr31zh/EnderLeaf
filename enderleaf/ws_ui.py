@@ -23,6 +23,7 @@ import flet_datatable2 as fdt
 
 ROOT_FOLDER = Path(__file__).parent.parent
 sys.path.append(str(ROOT_FOLDER))
+os.chdir(str(ROOT_FOLDER))
 
 from enderleaf.const import DEFAULT_DATETIME_FORMAT
 from enderleaf.enums import MsgType, LogLevel, ControllerCommands, NodeViewOption

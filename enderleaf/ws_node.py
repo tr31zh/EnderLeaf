@@ -3,11 +3,12 @@ import asyncio
 from websockets.asyncio.server import serve
 import json
 import socket
-import random
+import os
 import sys
 import signal
 
 sys.path.append(str(Path(__file__).parent.parent))
+os.chdir(str(Path(__file__).parent.parent))
 
 from enderleaf.enums import ControllerCommands, MsgType, LogLevel, LaunchOptons
 from enderleaf.socket_message import SocketMessage, result_message
@@ -301,13 +302,11 @@ async def handler(websocket):
 async def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     host = "0.0.0.0"
-    print(f"Starting node on :{socket.gethostname()}")
-    print("Starting camera")
     await controller.start()
-    print("Starting websocket")
     async with serve(handler, host, port, max_size=None):
         print(
-            f"Node server running on {host}:{port} (Hostname: {socket.gethostname()})"
+            f"Node server running on {host}:{port} (Hostname: {socket.gethostname()})",
+            flush=True,
         )
         await asyncio.Future()
 
