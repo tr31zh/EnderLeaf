@@ -35,7 +35,7 @@ if LOCAL_CLIENTS is True:
     PORTS = [i + 8760 for i in range(NUM_NODES)]
     NODES = [f"ws://localhost:{p}" for p in PORTS]
 else:
-    IPS = ["ws://147.100.144.150","ws://147.100.144.195"]
+    IPS = ["ws://147.100.144.150", "ws://147.100.144.195"]
     NODES = [f"{ip}:8765" for ip in IPS]
 
 BORDER_RADIUS = 6
@@ -230,7 +230,7 @@ class NodeUi:
         self.title = ft.Checkbox(
             label=node_ip,
             value=True,
-            label_style=ft.TextStyle(size=24, bgcolor=COLOUR_BACKGROUND),
+            label_style=ft.TextStyle(size=20, bgcolor=COLOUR_BACKGROUND),
             on_change=self.on_change_enabled,
         )
         self.image = ft.Image(
@@ -453,7 +453,6 @@ async def listen_for_updates(websocket, node_ip):
                 case MsgType.POSITION_PLOT:
                     node_ui.update_position_plot(image=soccket_message.image)
                 case MsgType.FOCUS_PLOT:
-                    print("Received focus plot")
                     node_ui.update_focus_plot(image=soccket_message.image)
                 case MsgType.CONFIG_DATA:
                     node_ui.update_config_data(
@@ -506,19 +505,20 @@ async def listen_for_updates(websocket, node_ip):
 
 async def execute_on_node(uri, func_name, **kwargs):
     try:
-        async with websockets.connect(uri) as websocket:
+        async with websockets.connect(
+            uri, open_timeout=5, ping_interval=60, ping_timeout=60
+        ) as websocket:
             asyncio.create_task(listen_for_updates(websocket, uri))
             message = {"func": func_name, "kwargs": kwargs}
             await websocket.send(json.dumps(message))
             await asyncio.wait_for(
                 completion_events[uri].wait(),
-                timeout=None,
-                # timeout=(
-                #     5
-                #     if func_name
-                #     in [ControllerCommands.PING, ControllerCommands.CONNECT_PRINTER]
-                #     else None
-                # ),
+                timeout=(
+                    5
+                    if func_name
+                    in [ControllerCommands.PING, ControllerCommands.GET_CONFIG]
+                    else None
+                ),
             )
     except asyncio.TimeoutError as e:
         log(
@@ -849,7 +849,7 @@ async def main(page: ft.Page):
         ),
         color_scheme_seed=COLOUR_ACCENT,
     )
-    page.theme_mode = ft.ThemeMode.LIGHT
+    # page.theme_mode = ft.ThemeMode.LIGHT
     page.update()
     if page.web is False:
         await page.window.center()
