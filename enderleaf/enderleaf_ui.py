@@ -76,10 +76,7 @@ log_file_handler.addFilter(MemoryFilter())
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s - %(mem_data)s - %(name)s - %(levelname)s] - %(message)s",
-    handlers=[
-        log_file_handler,
-        PanelLogHandler(target=mkd_log, card=crd_log),
-    ],
+    handlers=[log_file_handler],
 )
 
 logger = logger = logging.getLogger(__name__)
@@ -112,7 +109,6 @@ def working(method):
 
 
 # MARK: Controller Callbacks
-video_pane = pn.pane.Image(sizing_mode="scale_width")
 still_pane = pn.pane.Image(sizing_mode="scale_width")
 plt_position = pn.pane.Matplotlib(
     object=plot_path_status(title=""),
@@ -121,7 +117,9 @@ plt_position = pn.pane.Matplotlib(
     align="center",
 )
 plt_focus = pn.pane.Matplotlib(sizing_mode="stretch_width", height=330, align="center")
-sel_position = pn.widgets.Select(name="Position", options=[], width=100)
+sel_position = pn.widgets.Select(
+    name="Position", options=[i + 1 for i in range(81)], width=100
+)
 
 json_camera_config = pn.pane.JSON(
     object=None, name="Camera configuration", depth=-1, sizing_mode="stretch_width"
@@ -130,24 +128,20 @@ json_camera_config = pn.pane.JSON(
 pg_progress = pn.indicators.Progress(value=0, sizing_mode="stretch_width")
 
 
-def on_update_preview(image):
-    video_pane.object = to_pil(image)
-
-
-def on_update_still(image):
+async def on_update_still(image):
     still_pane.object = safe_pil_resize(to_pil(image), new_width=1024, new_height=768)
 
 
-def on_update_position_plot(new_plot):
+async def on_message_received(message):
+    mkd_log.object += "- " +  message + "\n\n"
+
+
+async def on_update_position_plot(new_plot):
     plt_position.object = new_plot
 
 
-def on_update_focus_plot(df_scores):
-    plt_focus.object = plot_focus_plt(df=df_scores)
-
-
-def on_update_positions(positions):
-    sel_position.options = [i + 1 for i in list(range(len(positions)))]
+async def on_update_focus_plot(fig):
+    plt_focus.object = fig
 
 
 def post_callback(request):
@@ -171,37 +165,12 @@ def on_progress_updated(current, total):
 
 # MARK: Controller
 controller = EnderLeafController()
-pg_progress.max = controller.plate_row_count * controller.plate_col_count
 
 # MARK: Widgets
 json_camera_controls = pn.widgets.JSONEditor(
     value=dict(sorted(controller.camera.camera_controls.items())),
     name="Camera controls",
     mode="view",
-    sizing_mode="stretch_width",
-)
-sel_sensor_modes = pn.widgets.Select(
-    name="Sensor modes",
-    options={
-        f'{x["format"].format} {x["size"]}': i
-        for i, x in enumerate(controller.camera.sensor_modes)
-    },
-    value=2,
-    sizing_mode="stretch_width",
-)
-bt_capture_still = pn.widgets.Button(
-    name="Capture still", icon="capture", icon_size="2em", sizing_mode="stretch_width"
-)
-bt_preview_start = pn.widgets.Button(
-    name="Start preview",
-    icon="player-play",
-    icon_size="2em",
-    sizing_mode="stretch_width",
-)
-bt_preview_stop = pn.widgets.Button(
-    name="Stop preview",
-    icon="player-stop",
-    icon_size="2em",
     sizing_mode="stretch_width",
 )
 
@@ -216,6 +185,9 @@ sel_printer = pn.widgets.Select(
 )
 bt_connect_printer = pn.widgets.Button(
     name="Connect to printer", icon="plug-connected", icon_size="2em"
+)
+bt_ping = pn.widgets.Button(
+    name="Ping", icon="ping-pong", icon_size="2em"
 )
 bt_home = pn.widgets.Button(
     name="Home",
@@ -362,9 +334,6 @@ sel_lights_cycle = pn.widgets.MultiChoice(
 # MARK: Cards
 crd_preview_options = pn.Column(
     objects=[
-        sel_sensor_modes,
-        pn.Row(bt_preview_start, bt_preview_stop),
-        bt_capture_still,
         pn.layout.WidgetBox(
             "#### Focus (Ignored while in experiments)",
             bt_focus,
@@ -406,25 +375,6 @@ crd_move = pn.Column(
 
 
 # MARK: Events
-def on_capture_still(event):
-    ensure_folder(Path(".").joinpath("output", "raw"))
-    image, _ = controller.capture_array()
-    to_pil(image).save(
-        Path(".")
-        .joinpath("output", "raw")
-        .joinpath(dt.now().strftime("%Y%m%d%H%M%S"))
-        .with_suffix(".jpg")
-    )
-
-
-def on_preview_start(event):
-    controller.start()
-
-
-def on_preview_stop(event):
-    controller.stop()
-
-
 @working
 def on_request_focus(event):
     controller.autofocus_cycle()
@@ -440,76 +390,73 @@ def on_request_focus_far(event):
     controller.set_focus_far()
 
 
-def on_connect_printer(event):
-    controller.connect_printer(sel_printer.value)
+async def on_connect_printer(event):
+    await controller.connect_printer(sel_printer.value)
 
 
-def on_home(event):
-    controller.go_home()
+async def on_home(event):
+    await controller.go_home()
 
 
-def on_idle(event):
-    controller.go_rest()
+async def on_idle(event):
+    await controller.go_rest()
 
 
-def on_park(event):
-    controller.go_park()
+async def on_park(event):
+    await controller.go_park()
 
 
-def on_center_on_qr_code(event):
-    controller.center_on_qr_code(
+async def on_center_on_qr_code(event):
+    await controller.center_on_qr_code(
         precise_focusing=LO_PRECISE_FOCUS in cbg_launch_options.value,
         switch_state=LO_SWITCH_STATE in cbg_launch_options.value,
     )
 
 
-def on_check_corners(event):
-    controller.check_corners()
+async def on_check_corners(event):
+    await controller.check_corners()
 
 
-def on_launch_acquisition(event):
-    controller.launch_acquisition(
+async def on_launch_acquisition(event):
+    await controller.launch_acquisition(
         precise_focusing=LO_PRECISE_FOCUS in cbg_launch_options.value,
         switch_state=LO_SWITCH_STATE in cbg_launch_options.value,
         center_on_leaf=LO_CENTER_OL in cbg_launch_options.value,
     )
 
 
-def on_cancel_request(event):
+async def on_cancel_request(event):
     if controller.status == ELStatus.JOB_IN_PROGRESS:
         controller.status = ELStatus.STOP_REQUESTED
 
 
-def on_check_disc_positions(event):
-    controller.check_discs_positions(
+async def on_check_disc_positions(event):
+    await controller.check_discs_positions(
         precise_focusing=LO_PRECISE_FOCUS in cbg_launch_options.value,
         switch_state=LO_SWITCH_STATE in cbg_launch_options.value,
     )
 
 
-def on_toggle_lights(event):
+async def on_toggle_lights(event):
     if controller.top_lights.mean == 0:
         bt_lights_toggle.icon = "bulb"
         bt_lights_toggle.button_type = "success"
-        controller.shutter(True)
+        await controller.shutter(True)
     else:
         bt_lights_toggle.icon = "bulb-off"
         bt_lights_toggle.button_type = "default"
-        controller.shutter(False)
+        await controller.shutter(False)
 
 
-def on_cycle_lights(event):
-    controller.cycle_lights()
+async def on_cycle_lights(event):
+    await controller.cycle_lights()
 
 
-def on_move_to(event):
-    controller.move_to(sel_position.value)
+async def on_move_to(event):
+    await controller.move_to(sel_position.value)
 
 
 # MARK: Binds
-bt_capture_still.on_click(on_capture_still)
-bt_preview_start.on_click(on_preview_start)
-bt_preview_stop.on_click(on_preview_stop)
 bt_focus.on_click(on_request_focus)
 bt_focus_close.on_click(on_request_focus_close)
 bt_focus_far.on_click(on_request_focus_far)
@@ -527,11 +474,6 @@ bt_check_discs.on_click(on_check_disc_positions)
 
 
 # MARK: Dependables
-@pn.depends(sel_sensor_modes.param.value, watch=True)
-def on_sensor_mode_changed(sensor_mode):
-    controller.set_sensor_mode(sensor_mode)
-
-
 @pn.depends(eis_lights_top_brightness.param.value, watch=True)
 def on_top_brightness_changed(brightness):
     controller.top_lights.brightness = brightness
@@ -601,41 +543,25 @@ def ui_main():
     return pn.Column(
         pn.layout.FlexBox(
             pn.Row(sel_printer, bt_connect_printer),
+            pn.Row(bt_ping),
             pn.Row(bt_idle, bt_park),
             pn.Row(bt_move_to, sel_position),
             pn.Row(bt_launch_acquisition, bt_stop_acquisition),
         ),
-        # pn.layout.GridBox(
-        #     pn.layout.WidgetBox("### Live preview", video_pane),
-        #     pn.layout.WidgetBox("### Last still", still_pane),
-        #     sizing_mode="scale_width",
-        #     ncols=2
-        # ),
-        # pn.layout.Accordion(
-        #     ("Live preview", video_pane),
-        #     ("Still preview", still_pane),
-        #     active=[0],
-        #     sizing_mode="stretch_height",
-        # )
-        pn.layout.Tabs(
-            ("Live preview", video_pane),
-            ("Still preview", still_pane),
-            active=0,
-            sizing_mode="stretch_height",
-        ),
+        still_pane,
         crd_log,
     )
 
 
-def ui_show():
-    controller.update_preview = on_update_preview
-    controller.update_still = on_update_still
-    controller.update_focus_plot = on_update_focus_plot
-    controller.update_position_plot = on_update_position_plot
-    controller.update_positions = on_update_positions
-    controller.update_progress = on_progress_updated
+async def ui_show():
+    controller.on_send_image = on_update_still
+    controller.on_send_focus_plot = on_update_focus_plot
+    controller.on_send_position_plot = on_update_position_plot
+    controller.on_send_progress = on_progress_updated
+    controller.on_send_message = on_message_received
     controller.camera.post_callback = post_callback
-    controller.start()
+    await controller.start() 
+    await controller.capture_image()
     sidebar = ui_sidebar()
     sidebar.width = SIDE_BAR_WIDTH
     return pn.Row(sidebar, ui_main())

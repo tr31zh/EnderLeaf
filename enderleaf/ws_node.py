@@ -52,7 +52,7 @@ async def node_ping(websocket, **kwargs):
     controller.socket = websocket
     await websocket.send(
         result_message(
-            result=await controller.send_ping_feedback(),
+            result=await controller.ping(),
             ok_message="Ping OK",
             nok_message="Ping failed",
         ).dump()

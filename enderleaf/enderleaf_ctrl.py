@@ -173,15 +173,39 @@ class EnderLeafController(object):
         # Socket communication
         self.socket = None
         # Callbacks
-        self.update_focus_plot = None
-        self.update_positions = None
-        self.update_progress = None
+        self.on_send_message = None
+        self.on_send_image = None
+        self.on_send_problem = None
+        self.on_send_progress = None
+        self.on_send_position_plot = None
+        self.on_send_focus_plot = None
+        self.on_send_data = None
+        self.on_send_ping_feedback = None
+        self.on_send_config = None
+        self.on_send_result = None
+        self.on_send_position = None
+
+    async def ping(self):
+        try:
+            _ = await self.capture_array()
+            if await self.printer_ready() is True:
+                x, y, z = await self.get_position()
+                await self.send_position(x, y, z)
+        except Exception as e:
+            await self.send_problem(
+                level=LogLevel.EXCEPTION, message=f"Ping failed: {str(e)}"
+            )
+            return False
+        else:
+            return True
 
     async def send_message(self, message):
         if self.socket is not None:
             await self.socket.send(
                 SocketMessage(type=MsgType.MESSAGE, message=message).dump()
             )
+        if self.on_send_message is not None:
+            await self.on_send_message(message)
 
     async def send_image(self, image):
         if self.socket is not None:
@@ -195,23 +219,27 @@ class EnderLeafController(object):
                     ),
                 ).dump()
             )
+        if self.on_send_image is not None:
+            await self.on_send_image(image)
 
     async def send_problem(self, level: LogLevel, message: str):
         if self.socket is not None:
             await self.socket.send(
                 SocketMessage(type=MsgType.PROBLEM, message=message, level=level).dump()
             )
+        if self.on_send_problem is not None:
+            await self.on_send_problem(level, message)
 
     async def send_progress(self, step, total):
         if self.socket is not None:
             await self.socket.send(
                 SocketMessage(type=MsgType.PROGRESS, step=step, total=total).dump()
             )
+        if self.on_send_progress is not None:
+            await self.on_send_progress(step, total)
 
     async def send_position_plot(self, index: int | list | None = None):
-        if self.socket is None:
-            return
-        elif len(self._positions) == 0:
+        if len(self._positions) == 0:
             fig = plot_path_status(z=await self.get_z())
         elif len(self._good_discs) > 0 or len(self._bad_discs) > 0:
             fig = plot_discs_status(
@@ -230,74 +258,71 @@ class EnderLeafController(object):
                 title="",
                 z=await self.get_z(),
             )
-
-        await self.socket.send(
-            SocketMessage(
-                type=MsgType.POSITION_PLOT, image=encode_image(plot_to_image(fig))
-            ).dump()
-        )
+        if self.socket is not None:
+            await self.socket.send(
+                SocketMessage(
+                    type=MsgType.POSITION_PLOT, image=encode_image(plot_to_image(fig))
+                ).dump()
+            )
+        if self.on_send_position_plot is not None:
+            await self.on_send_position_plot(fig)
 
     async def send_focus_plot(self, df_scores: pd.DataFrame):
-        if self.socket is None:
-            return
-        await self.socket.send(
-            SocketMessage(
-                type=MsgType.FOCUS_PLOT,
-                image=encode_image(plot_to_image(plot_focus_plt(df=df_scores))),
-            ).dump()
-        )
+        fig = plot_focus_plt(df=df_scores)
+        if self.socket is not None:
+            await self.socket.send(
+                SocketMessage(
+                    type=MsgType.FOCUS_PLOT,
+                    image=encode_image(plot_to_image(fig)),
+                ).dump()
+            )
+        if self.on_send_focus_plot is not None:
+            await self.on_send_focus_plot(fig)
 
     async def send_data(self, data):
-        if self.socket is None:
-            return
-        await self.socket.send(
-            SocketMessage(type=MsgType.CONFIG_DATA, image=data).dump()
-        )
-
-    async def send_ping_feedback(self):
-        try:
-            _ = await self.capture_array()
-        except Exception as e:
-            await self.send_problem(
-                level=LogLevel.EXCEPTION, message=f"Ping failed: {str(e)}"
+        if self.socket is not None:
+            await self.socket.send(
+                SocketMessage(type=MsgType.CONFIG_DATA, image=data).dump()
             )
-            return False
-        else:
-            return True
+        if self.on_send_data is not None:
+            await self.on_send_data(data)
 
     async def send_config(self):
-        if self.socket is None:
-            return
-        try:
-            await self.socket.send(
-                SocketMessage(type=MsgType.CONFIG_DATA, key=None).dump()
-            )
-            for k, v in self.to_json().items():
+        if self.socket is not None:
+            try:
                 await self.socket.send(
-                    SocketMessage(type=MsgType.CONFIG_DATA, key=k, value=v).dump()
+                    SocketMessage(type=MsgType.CONFIG_DATA, key=None).dump()
                 )
-        except Exception as e:
-            await self.send_problem(
-                level=LogLevel.EXCEPTION,
-                message=f"Failed to send config data: {str(e)}",
-            )
-            return False
-        else:
-            return True
+                for k, v in self.to_json().items():
+                    await self.socket.send(
+                        SocketMessage(type=MsgType.CONFIG_DATA, key=k, value=v).dump()
+                    )
+            except Exception as e:
+                await self.send_problem(
+                    level=LogLevel.EXCEPTION,
+                    message=f"Failed to send config data: {str(e)}",
+                )
+                return False
+            else:
+                return True
+        if self.on_send_config is not None:
+            await self.on_send_config(self.to_json())
 
     async def send_result(self, level: LogLevel, message: str):
-        if self.socket is None:
-            return
-        await self.socket.send(
-            SocketMessage(type=MsgType.RESULT, message=message, level=level).dump()
-        )
+        if self.socket is not None:
+            await self.socket.send(
+                SocketMessage(type=MsgType.RESULT, message=message, level=level).dump()
+            )
+        if self.on_send_result is not None:
+            await self.on_send_result(level, message)
 
     async def send_position(self, x, y, z: float):
-        if self.socket is None:
-            return
-        await self.socket.send(
-            SocketMessage(type=MsgType.POSITION_DATA, x=x, y=y, z=z).dump()
-        )
+        if self.socket is not None:
+            await self.socket.send(
+                SocketMessage(type=MsgType.POSITION_DATA, x=x, y=y, z=z).dump()
+            )
+        if self.on_send_position is not None:
+            await self.on_send_position(x, y, z)
 
     def reset(self):
         self.crop_left = 1200
@@ -878,8 +903,6 @@ class EnderLeafController(object):
             x,
             y,
         ]
-        if self.update_positions is not None:
-            self.update_positions(self._positions)
         await self.send_position_plot(index=[0])
 
     async def get_focused_z(self, delta_z=1):
@@ -1011,7 +1034,7 @@ class EnderLeafController(object):
             return
         await self.set_focus_close()
         x, y, z = await self.center_on_qr_code(precise_focusing=precise_focusing)
-        self.build_snake(x, y)
+        await self.build_snake(x, y)
         for position in get_extremes(self._positions):
             await self.move_position((position.x, position.y, z), index=[position.name])
             await asyncio.sleep(1)
