@@ -141,29 +141,23 @@ class LaunchOptons(str, Enum):
 
 
 class ControllerCommands(str, Enum):
-    START = "start"
-    STOP = "stop"
-    PING = "ping"
-    CAPTURE_STILL = "capture_still"
-    FOCUS_AUTO = "autofocus"
-    FOCUS_CLOSE = "focus_close"
-    FOCUS_FAR = "focus_far"
-    CONNECT_PRINTER = "connect_printer"
-    GO_HOME = "go_home"
-    GO_IDLE = "go_idle"
-    GO_PARK = "go_park"
-    CENTER_ON_QR_CODE = "center_on_QR_code"
-    CHECK_CORNERS = "check_corners"
-    TOGGLE_LIGHTS = "toggle_lights"
-    CYCLE_LIGHTS = "cycle_lights"
-    MOVE_TO = "move_to"
-    GET_CONFIG = "GET_CONFIG".lower()
-
-    @staticmethod
-    def display_name(command)->str:
-        result = command.value
-        result = result[0].capitalize() + result[1:]
-        return result.replace("_", " ")
+    START = "Start"
+    STOP = "Stop"
+    PING = "Ping"
+    CAPTURE_STILL = "Capture still"
+    FOCUS_AUTO = "Autofocus"
+    FOCUS_CLOSE = "Focus close"
+    FOCUS_FAR = "Focus far"
+    CONNECT_PRINTER = "Connect printer"
+    GO_HOME = "Go Home"
+    GO_IDLE = "Go Idle"
+    GO_PARK = "Go park"
+    CENTER_ON_QR_CODE = "Center on QR code"
+    CHECK_CORNERS = "Check corners"
+    TOGGLE_LIGHTS = "Toggle lights"
+    CYCLE_LIGHTS = "Cycle lights"
+    MOVE_TO = "Move to"
+    GET_CONFIG = "Get config"
 
 class NodeViewOption(str, Enum):
     IMAGE = "Image"

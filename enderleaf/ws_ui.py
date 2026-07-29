@@ -630,15 +630,11 @@ async def on_nodes_view_changed(e: ft.Event[ft.Dropdown]):
 
 
 def get_side_bar_button(command, icon=None, disabled=False):
-    return EnderButton(
-        content=ControllerCommands.display_name(command),
-        on_click=on_run_task,
-        icon=icon,
-    )
+    return EnderButton(content=command, on_click=on_run_task, icon=icon)
 
 
 bt_connect_printer = ft.FilledButton(
-    content=ControllerCommands.display_name(ControllerCommands.CONNECT_PRINTER),
+    content=ControllerCommands.CONNECT_PRINTER,
     on_click=on_run_task,
     icon=ft.Icons.INSERT_LINK,
     expand=True,
@@ -650,11 +646,6 @@ bt_ping = get_side_bar_button(
 bt_get_config = get_side_bar_button(
     ControllerCommands.GET_CONFIG, icon=ft.Icons.SETTINGS_ROUNDED
 )
-# bt_capture_still = EnderButton(
-#     content=ControllerCommands.display_name(ControllerCommands.CAPTURE_STILL),
-#     on_click=on_run_task,
-#     icon=ft.Icons.ADD_A_PHOTO_SHARP,
-# )
 bt_home = get_side_bar_button(ControllerCommands.GO_HOME, icon=ft.Icons.HOME)
 bt_idle = get_side_bar_button(
     ControllerCommands.GO_IDLE,
@@ -662,7 +653,7 @@ bt_idle = get_side_bar_button(
 )
 bt_park = get_side_bar_button(ControllerCommands.GO_PARK, icon=ft.Icons.LOCAL_PARKING)
 bt_launch = ft.FilledButton(
-    content=ControllerCommands.display_name(ControllerCommands.START),
+    content=ControllerCommands.START,
     expand=True,
     on_click=on_run_task,
     icon=ft.Icons.PLAY_ARROW_SHARP,
