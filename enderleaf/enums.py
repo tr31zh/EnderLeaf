@@ -87,6 +87,7 @@ class MsgType(str, Enum):
     FOCUS_PLOT = "FOCUS_PLOT".lower()
     POSITION_PLOT = "POSITION_PLOT".lower()
     CONFIG_DATA = "CONFIG_DATA".lower()
+    POSITION_DATA = "POSITION_DATA".lower()
 
 
 class LogLevel(str, Enum):

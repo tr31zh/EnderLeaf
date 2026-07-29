@@ -21,9 +21,8 @@ controller = EnderLeafController()
 def sigint_handler(sig, frame):
     print("")
     print("Stopping node")
-    controller.sync_stop()
-
-    print("Controller stopped")
+    controller.close()
+    print("Controller closed")
     sys.exit(0)
 
 
@@ -113,9 +112,7 @@ async def node_go_idle(websocket, **kwargs):
 
 async def node_start(websocket, **kwargs):
     controller.socket = websocket
-    launch_options = kwargs.get(
-        "launch_options", [LaunchOptons.PRECISE_FOCUS, LaunchOptons.CENTER_OL]
-    )
+    launch_options = kwargs.get("launch_options", [])
     await controller.launch_acquisition(
         precise_focusing=LaunchOptons.PRECISE_FOCUS in launch_options,
         center_on_leaf=LaunchOptons.CENTER_OL in launch_options,
@@ -193,8 +190,7 @@ async def node_center_on_qr_code(websocket, **kwargs):
     )
     launch_options = kwargs.get("launch_options", [])
     await controller.center_on_qr_code(
-        precise_focusing=LaunchOptons.PRECISE_FOCUS in launch_options,
-        switch_state=LaunchOptons.SWITCH_STATE in launch_options,
+        precise_focusing=LaunchOptons.PRECISE_FOCUS in launch_options
     )
     await websocket.send(
         SocketMessage(type=MsgType.RESULT, message="Centered on QR code").dump()
@@ -209,7 +205,10 @@ async def node_check_corners(websocket, **kwargs):
             message="Checking corners. No other operation is allowed",
         ).dump()
     )
-    await controller.check_corners()
+    launch_options = kwargs.get("launch_options", [])
+    await controller.check_corners(
+        precise_focusing=LaunchOptons.PRECISE_FOCUS in launch_options
+    )
     await websocket.send(
         SocketMessage(type=MsgType.RESULT, message="Corners checked").dump()
     )

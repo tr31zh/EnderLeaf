@@ -292,6 +292,13 @@ class EnderLeafController(object):
             SocketMessage(type=MsgType.RESULT, message=message, level=level).dump()
         )
 
+    async def send_position(self, x, y, z: float):
+        if self.socket is None:
+            return
+        await self.socket.send(
+            SocketMessage(type=MsgType.POSITION_DATA, x=x, y=y, z=z).dump()
+        )
+
     def reset(self):
         self.crop_left = 1200
         self.crop_right = 1200
@@ -607,9 +614,11 @@ class EnderLeafController(object):
     async def stop(self):
         self.sync_stop()
 
-    def sync_stop(self):
+    def close(self):
         if self._camera_state not in [CameraState.IDLE, CameraState.SIMULATION]:
             self.camera.stop()
+            self.camera.close()
+            self.top_lights.shutter(state=False)
             self._camera_state = CameraState.IDLE
 
     async def switch_state(self, new_mode: CameraState):
@@ -659,6 +668,8 @@ class EnderLeafController(object):
         if await self.printer_ready() is False:
             return False
         await self._stage.finish_moves()
+        x, y, z = await self.get_position()
+        await self.send_position(x, y, z)
         await self.capture_array()
 
     async def move_position(
@@ -995,11 +1006,11 @@ class EnderLeafController(object):
         finally:
             self.restore_crop_values()
 
-    async def check_corners(self):
+    async def check_corners(self, precise_focusing: bool = True):
         if await self.printer_ready() is False:
             return
         await self.set_focus_close()
-        x, y, z = self.center_on_qr_code()
+        x, y, z = await self.center_on_qr_code(precise_focusing=precise_focusing)
         self.build_snake(x, y)
         for position in get_extremes(self._positions):
             await self.move_position((position.x, position.y, z), index=[position.name])

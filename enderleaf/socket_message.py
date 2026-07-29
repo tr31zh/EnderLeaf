@@ -15,21 +15,12 @@ class SocketMessage:
     level: LogLevel = LogLevel.INFO
     key: str | None = None
     value: str = ""
+    x: float | None = None
+    y: float | None = None
+    z: float | None = None
 
     def to_json(self):
-        return {
-            k: getattr(self, k)
-            for k in [
-                "type",
-                "message",
-                "image",
-                "step",
-                "total",
-                "level",
-                "key",
-                "value",
-            ]
-        }
+        return {k: getattr(self, k) for k in self.__dataclass_fields__}
 
     def __str__(self) -> str:
         return self.dump()
@@ -44,7 +35,7 @@ class SocketMessage:
     @classmethod
     def load(cls, data: str):
         return cls(**json.loads(data))
-    
+
 
 @dataclass
 class SocketData:
