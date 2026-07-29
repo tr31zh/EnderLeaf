@@ -26,7 +26,13 @@ sys.path.append(str(ROOT_FOLDER))
 os.chdir(str(ROOT_FOLDER))
 
 from enderleaf.const import DEFAULT_DATETIME_FORMAT
-from enderleaf.enums import MsgType, LogLevel, ControllerCommands, NodeViewOption
+from enderleaf.enums import (
+    MsgType,
+    LogLevel,
+    ControllerCommands,
+    NodeViewOption,
+    LaunchOptons,
+)
 from enderleaf.socket_message import SocketMessage
 from enderleaf.image import encode_image
 
@@ -511,6 +517,7 @@ async def execute_on_node(uri, func_name, **kwargs):
         ) as websocket:
             asyncio.create_task(listen_for_updates(websocket, uri))
             message = {"func": func_name, "kwargs": kwargs}
+            print(message)
             await websocket.send(json.dumps(message))
             await asyncio.wait_for(
                 completion_events[uri].wait(),
@@ -558,10 +565,17 @@ async def run_task(task_name: ControllerCommands = ControllerCommands.START):
     kwargs = {}
     if task_name == ControllerCommands.MOVE_TO:
         kwargs["position"] = int(dd_position.value)
+    elif task_name == ControllerCommands.START:
+        kwargs["launch_options"] = [LaunchOptons.PRECISE_FOCUS, LaunchOptons.CENTER_OL]
+    elif task_name in [
+        ControllerCommands.CENTER_ON_QR_CODE,
+        ControllerCommands.CHECK_CORNERS,
+    ]:
+        kwargs["launch_options"] = [LaunchOptons.PRECISE_FOCUS]
     if fs_node is None:
         for uri in NODES:
             node_ui = node_uis[uri]
-            node_ui.reset(f"{task_name.capitalize().replace("_", " ")} in progress...")
+            node_ui.reset(f"{task_name} in progress...")
             if node_ui.title.value is False:
                 continue
             tasks.append(
@@ -570,7 +584,7 @@ async def run_task(task_name: ControllerCommands = ControllerCommands.START):
                 )
             )
     else:
-        fs_node.reset(f"{task_name.capitalize().replace("_", " ")} in progress...")
+        fs_node.reset(f"{task_name} in progress...")
         tasks.append(
             asyncio.create_task(execute_on_node(fs_node.node_ip, task_name, **kwargs))
         )
@@ -617,7 +631,7 @@ async def set_disable(is_disable: bool, is_stop_enabled: bool):
 
 
 async def on_run_task(e: ft.Event[ft.Button]):
-    await run_task(e.control.content.lower().replace(" ", "_"))
+    await run_task(e.control.content)
 
 
 def on_capture_array(e):
