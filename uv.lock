@@ -548,6 +548,7 @@ dependencies = [
     { name = "black" },
     { name = "flet", extra = ["all"] },
     { name = "flet-datatable2" },
+    { name = "flet-spinkit" },
     { name = "ipympl" },
     { name = "ipywidgets" },
     { name = "ipywidgets-bokeh" },
@@ -575,6 +576,7 @@ requires-dist = [
     { name = "black", specifier = ">=26.3.1" },
     { name = "flet", extras = ["all"], specifier = ">=0.86.0" },
     { name = "flet-datatable2", specifier = ">=0.86.0" },
+    { name = "flet-spinkit", specifier = ">=0.86.0" },
     { name = "ipympl", specifier = ">=0.10.0" },
     { name = "ipywidgets", specifier = ">=8.1.8" },
     { name = "ipywidgets-bokeh", specifier = ">=1.7.0" },
@@ -703,6 +705,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/79/4d/bf268920dcf0028f7db1d6e149072f4b750b5c1fb47534500657241d6a4a/flet_desktop-0.86.0.tar.gz", hash = "sha256:0e632070aff0c930a2721186bc9b4b3e7f8e374fd29b333731d772404974e8c5", size = 6326, upload-time = "2026-07-14T21:50:40.194Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/64/9c/4e8730dd312f0c850a4e64be8150981ab658742ef071b8a9609cb33287ed/flet_desktop-0.86.0-py3-none-any.whl", hash = "sha256:05fe38605bceca505e1c70700f090e0d9861ccf8a72a1b87e059ccc096ecedb4", size = 6418, upload-time = "2026-07-14T21:50:39.196Z" },
+]
+
+[[package]]
+name = "flet-spinkit"
+version = "0.86.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "flet" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f7/dd/4623e0e6816b1958d38d80d97f1da215c43e311bc70dc1cc31c675f1f3c3/flet_spinkit-0.86.0.tar.gz", hash = "sha256:3b5b1459a9aed1484f3a2907aab17fd9d5f9c14850a4dc38a17bfa49a0847cfb", size = 11555, upload-time = "2026-07-14T21:51:37.476Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/ab/67431a5a3eff0ebc8de6cd55ba0c34fbcf00d2dcfbb3e90d45b8c6413537/flet_spinkit-0.86.0-py3-none-any.whl", hash = "sha256:cc4e63dc83b0b4398eae798ecef0d7f9be0a8653df6dcc95e76f88589e23e410", size = 13245, upload-time = "2026-07-14T21:51:36.589Z" },
 ]
 
 [[package]]

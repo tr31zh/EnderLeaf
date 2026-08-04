@@ -8,6 +8,7 @@ dependencies = [
     "albumentations>=2.0.8",
     "black>=26.3.1",
     "flet-datatable2>=0.86.0",
+    "flet-spinkit>=0.86.0",
     "flet[all]>=0.86.0",
     "ipympl>=0.10.0",
     "ipywidgets>=8.1.8",

@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 
 import flet as ft
 import flet_datatable2 as fdt
+import flet_spinkit as spins
 
 ROOT_FOLDER = Path(__file__).parent.parent
 sys.path.append(str(ROOT_FOLDER))
@@ -108,9 +109,6 @@ def level_to_color(level: LogLevel | int):
             return ft.Colors.RED
         case _:
             return None
-
-
-logging.DEBUG
 
 
 def log(level, message: str, node_ip: str | None = None):
@@ -240,6 +238,16 @@ class NodeUi:
             label_style=ft.TextStyle(size=20, bgcolor=COLOUR_BACKGROUND),
             on_change=self.on_change_enabled,
         )
+        self.working_spin = spins.Ring(
+            color=COLOUR_ACCENT, expand=True, visible=False, height=20,line_width=4
+        )
+        self.expand_toggle = ft.IconButton(
+            icon=ft.Icons.FULLSCREEN,
+            icon_color=ft.Colors.PRIMARY,
+            icon_size=36,
+            padding=ft.Padding.all(0),
+        )
+
         self.image = ft.Image(
             src=generate_frame(),
             fit=ft.BoxFit.CONTAIN,
@@ -311,7 +319,10 @@ class NodeUi:
             content=ft.Column(
                 controls=[
                     ft.Row(
-                        controls=[self.title, self.expand_toggle],
+                        controls=[
+                            self.title,
+                            ft.Row(controls=[self.working_spin, self.expand_toggle]),
+                        ],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
                     self.main_view,
@@ -436,6 +447,12 @@ class EnderButton(ft.Button):
     height: int = BTN_HEIGHT
 
 
+async def job_done(node_ip):
+    node_uis[node_ip].working_spin.visible = False
+    node_uis[node_ip].working_spin.update()
+    completion_events[node_ip].set()
+
+
 async def listen_for_updates(websocket, node_ip):
     try:
         async for message in websocket:
@@ -459,6 +476,8 @@ async def listen_for_updates(websocket, node_ip):
                     node_ui.update_image(image=soccket_message.image)
                 case MsgType.POSITION_PLOT:
                     node_ui.update_position_plot(image=soccket_message.image)
+                case MsgType.POSITION_DATA:
+                    print(soccket_message.x, soccket_message.y, soccket_message.z)
                 case MsgType.FOCUS_PLOT:
                     node_ui.update_focus_plot(image=soccket_message.image)
                 case MsgType.CONFIG_DATA:
@@ -474,7 +493,7 @@ async def listen_for_updates(websocket, node_ip):
                         message=soccket_message.message,
                         node_ip=node_ip,
                     )
-                    completion_events[node_ip].set()
+                    await job_done(node_ip=node_ip)
                 case MsgType.PROBLEM:
                     node_ui.update_alert(
                         log_level=soccket_message.level, message=soccket_message.message
@@ -485,7 +504,7 @@ async def listen_for_updates(websocket, node_ip):
                         node_ip=node_ip,
                     )
                     if soccket_message.level in [LogLevel.ERROR, LogLevel.CRITICAL]:
-                        completion_events[node_ip].set()
+                        await job_done(node_ip=node_ip)
                 case _:
                     log(
                         level=LogLevel.CRITICAL,
@@ -496,13 +515,13 @@ async def listen_for_updates(websocket, node_ip):
                         log_level=soccket_message.level,
                         message=f"Unknown message type '{str(soccket_message.type)}'",
                     )
-                    completion_events[node_ip].set()
+                    await job_done(node_ip=node_ip)
     except websockets.exceptions.ConnectionClosed:
         log(
             level=LogLevel.ERROR,
             message=f"[{node_ip}] Connection closed unexpectedly",
         )
-        completion_events[node_ip].set()
+        await job_done(node_ip=node_ip)
     except Exception as e:
         log(
             level=LogLevel.ERROR,
@@ -623,9 +642,15 @@ async def set_disable(is_disable: bool, is_stop_enabled: bool):
     ]:
         ctrl.disabled = is_disable
         ctrl.update()
+    spin_working.visible = is_disable
+    spin_working.update()
+    is_fullscreen = fullscreen_node() is not None
     for uri in NODES:
         node_uis[uri].title.disabled = is_disable
         node_uis[uri].title.update()
+        if is_fullscreen is False:
+            node_uis[uri].working_spin.visible = is_disable
+            node_uis[uri].working_spin.update()
     bt_stop.disabled = not is_stop_enabled
     bt_stop.update()
 
@@ -700,7 +725,7 @@ bt_far = get_side_bar_button(
 )
 
 dd_position = ft.Dropdown(
-    options=[ft.DropdownOption(key=i, content=ft.Text(i)) for i in range(78)]
+    options=[ft.DropdownOption(key=i + 1, content=ft.Text(i + 1)) for i in range(81)]
 )
 
 dd_view = ft.Dropdown(
@@ -717,6 +742,8 @@ dd_view = ft.Dropdown(
     value=NodeViewOption.IMAGE.value,
     on_select=on_nodes_view_changed,
 )
+
+spin_working = spins.Wave(color=COLOUR_ACCENT, expand=True, visible=False)
 
 ep_extra_controls = ft.ExpansionTile(
     title=ft.Text("Extra controls"),
@@ -757,6 +784,7 @@ gv_nodes = ft.GridView(
 side_buttons = ft.Column(
     intrinsic_width=True,
     controls=[
+        ft.Row(spin_working),
         ft.Row(bt_connect_printer),
         ft.Row(bt_ping),
         ft.Row(bt_home),
@@ -878,10 +906,12 @@ async def main(page: ft.Page):
         if len(page.route) > 1:
             page.views.append(fullscren_page(page.route))
             page.dark_theme = ft.Theme(color_scheme_seed=FULLSCREEN_COLOUR_ACCENT)
+            spin_working.color = FULLSCREEN_COLOUR_ACCENT
         else:
             for nu in node_uis.values():
                 nu.fullscreen = False
             page.dark_theme = ft.Theme(color_scheme_seed=COLOUR_ACCENT)
+            spin_working.color = COLOUR_ACCENT
 
         page.update()
 
