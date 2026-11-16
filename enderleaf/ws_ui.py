@@ -890,17 +890,14 @@ async def main(page: ft.Page):
     page.update()
 
     async def go_fullscreen(e: ft.Event[ft.IconButton]):
-        log(level=LogLevel.DEBUG, message=str(e.control.node_ip))
+        # log(level=LogLevel.DEBUG, message=str(e.control.node_ip))
         await page.push_route(f"/{e.control.node_ip}")
 
     for nu in node_uis.values():
         nu.expand_toggle.on_click = go_fullscreen
 
     def route_change():
-        try:
-            log(level=LogLevel.DEBUG, message=f"Route changed -> {page.route}")
-        except:
-            pass
+        # log(level=LogLevel.DEBUG, message=f"Route changed -> {page.route}")
         page.views.clear()
         page.views.append(global_page())
         if len(page.route) > 1:
@@ -917,7 +914,7 @@ async def main(page: ft.Page):
 
     async def view_pop(e):
         if e.view is not None:
-            log(level=LogLevel.DEBUG, message=f"View pop: {e.view}")
+            # log(level=LogLevel.DEBUG, message=f"View pop: {e.view}")
             page.views.remove(e.view)
             top_view = page.views[-1]
             await page.push_route(top_view.route)

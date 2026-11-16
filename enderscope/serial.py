@@ -713,7 +713,7 @@ class _VirtualMarlinDevice:
             if not raw:
                 continue
             try:
-                text = raw.decode("utf-8", errors="replace")
+                text = raw.decode("ascii", errors="replace")
             except Exception:
                 continue
             for out in self._proto.handle(text):
