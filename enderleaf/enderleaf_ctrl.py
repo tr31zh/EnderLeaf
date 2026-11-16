@@ -199,6 +199,21 @@ class EnderLeafController(object):
         else:
             return True
 
+    async def identify(self, color, wait):
+        try:
+            self.top_lights.rgb(color=color)
+            _ = await self.capture_array()
+            await asyncio.sleep(wait)
+            self.top_lights.rgb(color=(255, 255, 255))
+            await self.capture_array()
+        except Exception as e:
+            await self.send_problem(
+                level=LogLevel.EXCEPTION, message=f"Identify failed: {str(e)}"
+            )
+            return False
+        else:
+            return True
+
     async def send_message(self, message):
         if self.socket is not None:
             await self.socket.send(

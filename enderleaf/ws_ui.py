@@ -36,6 +36,7 @@ from enderleaf.enums import (
 )
 from enderleaf.socket_message import SocketMessage
 from enderleaf.image import encode_image
+from enderleaf.tools import build_color_steps
 
 LOCAL_CLIENTS = False
 if LOCAL_CLIENTS is True:
@@ -46,6 +47,8 @@ else:
     IPS = ["ws://147.100.144.150", "ws://147.100.144.195"]
     NODES = [f"{ip}:8765" for ip in IPS]
 
+ID_COLORS = build_color_steps(step_count=len(NODES))
+ID_TIME = 2
 BORDER_RADIUS = 6
 BTN_HEIGHT = 40
 PATH_LOG = Path(__file__).resolve().parent.parent.joinpath("logs")
@@ -174,18 +177,14 @@ logger.info("==== Starting session ====")
 logger.info("")
 
 
-def generate_frame(width=1280, height=720) -> bytes:
+def generate_frame(width=1280, height=720, color: tuple | list | None = None) -> bytes:
     """Generates a random RGB image and returns it as JPEG bytes."""
-    img_bytes = io.BytesIO()
-    frame = np.full(
-        shape=(height, width, 3),
-        dtype=np.uint8,
-        fill_value=(
-            random.randint(0, 255),
-            random.randint(0, 255),
-            random.randint(0, 255),
-        ),
+    color = (
+        color
+        if color is not None
+        else (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
     )
+    frame = np.full(shape=(height, width, 3), dtype=np.uint8, fill_value=color)
     _, im_enc = cv2.imencode(".png", frame)
     im_b64 = base64.b64encode(im_enc)
     return im_b64.decode("utf-8")
@@ -230,8 +229,9 @@ class ConfUnit:
 
 
 class NodeUi:
-    def __init__(self, node_ip):
+    def __init__(self, node_ip, id_color):
         self.node_ip = node_ip
+        self.id_color = id_color
         self.title = ft.Checkbox(
             label=node_ip,
             value=True,
@@ -239,7 +239,7 @@ class NodeUi:
             on_change=self.on_change_enabled,
         )
         self.working_spin = spins.Ring(
-            color=COLOUR_ACCENT, expand=True, visible=False, height=20,line_width=4
+            color=COLOUR_ACCENT, expand=True, visible=False, height=20, line_width=4
         )
         self.expand_toggle = ft.IconButton(
             icon=ft.Icons.FULLSCREEN,
@@ -249,7 +249,7 @@ class NodeUi:
         )
 
         self.image = ft.Image(
-            src=generate_frame(),
+            src=generate_frame(color=self.id_color),
             fit=ft.BoxFit.CONTAIN,
             gapless_playback=True,
             expand=True,
@@ -430,7 +430,7 @@ class NodeUi:
             )
 
 
-node_uis = {k: NodeUi(k) for k in NODES}
+node_uis = {k: NodeUi(k, id_color=ID_COLORS[i]) for i, k in enumerate(NODES)}
 
 
 def fullscreen_node() -> NodeUi | None:
@@ -543,8 +543,16 @@ async def execute_on_node(uri, func_name, **kwargs):
                 timeout=(
                     5
                     if func_name
-                    in [ControllerCommands.PING, ControllerCommands.GET_CONFIG]
-                    else None
+                    in [
+                        ControllerCommands.PING,
+                        ControllerCommands.GET_CONFIG,
+                        ControllerCommands.IDENTIFY,
+                    ]
+                    else (
+                        60
+                        if func_name in [ControllerCommands.CONNECT_PRINTER]
+                        else None
+                    )
                 ),
             )
     except asyncio.TimeoutError as e:
@@ -582,19 +590,20 @@ async def run_task(task_name: ControllerCommands = ControllerCommands.START):
     await set_disable(True, is_stop_enabled=task_name == ControllerCommands.START)
     tasks = []
     kwargs = {}
-    if task_name == ControllerCommands.MOVE_TO:
-        kwargs["position"] = int(dd_position.value)
-    elif task_name == ControllerCommands.START:
-        kwargs["launch_options"] = [LaunchOptons.PRECISE_FOCUS, LaunchOptons.CENTER_OL]
-    elif task_name in [
-        ControllerCommands.CENTER_ON_QR_CODE,
-        ControllerCommands.CHECK_CORNERS,
-    ]:
-        kwargs["launch_options"] = [LaunchOptons.PRECISE_FOCUS]
+    match task_name:
+        case ControllerCommands.MOVE_TO:
+            kwargs["position"] = int(dd_position.value)
+        case ControllerCommands.START:
+            kwargs["launch_options"] = [LaunchOptons.PRECISE_FOCUS, LaunchOptons.CENTER_OL]
+        case ControllerCommands.CENTER_ON_QR_CODE | ControllerCommands.CHECK_CORNERS:
+            kwargs["launch_options"] = [LaunchOptons.PRECISE_FOCUS]
     if fs_node is None:
         for uri in NODES:
             node_ui = node_uis[uri]
             node_ui.reset(f"{task_name} in progress...")
+            if task_name == ControllerCommands.IDENTIFY:
+                kwargs["color"] = node_ui.id_color
+                kwargs["wait"] = ID_TIME
             if node_ui.title.value is False:
                 continue
             tasks.append(
@@ -625,6 +634,7 @@ async def set_disable(is_disable: bool, is_stop_enabled: bool):
     for ctrl in [
         bt_connect_printer,
         bt_ping,
+        bt_identify,
         bt_home,
         bt_park,
         bt_idle,
@@ -681,6 +691,9 @@ bt_connect_printer = ft.FilledButton(
 )
 bt_ping = get_side_bar_button(
     command=ControllerCommands.PING, icon=ft.Icons.NETWORK_PING
+)
+bt_identify = get_side_bar_button(
+    command=ControllerCommands.IDENTIFY, icon=ft.Icons.QUESTION_MARK
 )
 bt_get_config = get_side_bar_button(
     ControllerCommands.GET_CONFIG, icon=ft.Icons.SETTINGS_ROUNDED
@@ -787,6 +800,7 @@ side_buttons = ft.Column(
         ft.Row(spin_working),
         ft.Row(bt_connect_printer),
         ft.Row(bt_ping),
+        ft.Row(bt_identify),
         ft.Row(bt_home),
         ft.Row(bt_idle),
         ft.Row(bt_park),
@@ -860,7 +874,7 @@ def fullscren_page(route) -> ft.View:
 async def main(page: ft.Page):
     page.title = "EnderLeaf"
     page.window.width = 1200
-    page.window.height = 1000
+    page.window.height = 900
     page.vertical_alignment = ft.MainAxisAlignment.START
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
     page.theme = ft.Theme(
@@ -885,8 +899,8 @@ async def main(page: ft.Page):
     )
     # page.theme_mode = ft.ThemeMode.LIGHT
     page.update()
-    if page.web is False:
-        await page.window.center()
+    # if page.web is False:
+    #     await page.window.center()
     page.update()
 
     async def go_fullscreen(e: ft.Event[ft.IconButton]):
@@ -927,12 +941,6 @@ async def main(page: ft.Page):
     route_change()
 
     log(LogLevel.INFO, "Started")
-
-    # log(LogLevel.INFO, "INFO")
-    # log(LogLevel.WARNING, "WARNING")
-    # log(LogLevel.EXCEPTION, "EXCEPTION")
-    # log(LogLevel.ERROR, "ERROR")
-    # log(LogLevel.CRITICAL, "CRITICAL")
 
 
 ft.run(main=main)

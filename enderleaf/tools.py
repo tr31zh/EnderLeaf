@@ -2,6 +2,7 @@ from pathlib import Path
 from timeit import default_timer as timer
 from datetime import datetime as dt
 import psutil
+import math
 
 import pandas as pd
 
@@ -93,3 +94,30 @@ def write_dataframe(df: pd.DataFrame, path: Path, sep: str = ";") -> pd.DataFram
 
 def get_available_hd():
     return psutil.disk_usage(".").free / 1024**3
+
+
+def scaled_rgb(mag, color_min, color_max):
+    """Return a tuple of integers, as used in AWT/Java plots."""
+    try:
+        x = float(mag - color_min) / (color_max - color_min)
+    except ZeroDivisionError:
+        x = 0.5  # color_max == color_min
+    blue = min((max((4 * (0.75 - x), 0.0)), 1.0))
+    red = min((max((4 * (x - 0.25), 0.0)), 1.0))
+    green = min((max((4 * math.fabs(x - 0.5) - 1.0, 0.0)), 1.0))
+    return int(red * 255), int(green * 255), int(blue * 255)
+
+
+def build_color_steps(step_count: int) -> list:
+    """
+    Builds a list containing step_count different colors from blue to yellow
+    :param step_count:
+    :return:
+    """
+    if step_count <= 1:
+        return [(255, 0, 255)]
+    else:
+        return [
+            scaled_rgb(mag=i, color_min=0, color_max=step_count)
+            for i in range(step_count)
+        ]

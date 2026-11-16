@@ -59,6 +59,17 @@ async def node_ping(websocket, **kwargs):
     )
 
 
+async def node_identify(websocket, **kwargs):
+    controller.socket = websocket
+    await websocket.send(
+        result_message(
+            result=await controller.identify(**kwargs),
+            ok_message="Identify OK",
+            nok_message="Identify failed",
+        ).dump()
+    )
+
+
 async def node_get_config(websocket, **kwargs):
     controller.socket = websocket
     await websocket.send(
@@ -247,6 +258,7 @@ FUNCTION_REGISTRY = {
     ControllerCommands.START: node_start,
     ControllerCommands.STOP: node_stop,
     ControllerCommands.PING: node_ping,
+    ControllerCommands.IDENTIFY: node_identify,
     ControllerCommands.CAPTURE_STILL: node_capture_still,
     ControllerCommands.FOCUS_AUTO: node_request_focus,
     ControllerCommands.FOCUS_CLOSE: node_request_focus_close,

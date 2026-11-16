@@ -145,6 +145,7 @@ class ControllerCommands(str, Enum):
     START = "Start"
     STOP = "Stop"
     PING = "Ping"
+    IDENTIFY = "Identify"
     CAPTURE_STILL = "Capture still"
     FOCUS_AUTO = "Autofocus"
     FOCUS_CLOSE = "Focus close"

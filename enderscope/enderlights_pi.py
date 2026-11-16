@@ -20,6 +20,7 @@ except:
 
 from enderleaf.enums import CardPoint
 
+
 @dataclass
 class LedData:
     pin: Any
@@ -179,6 +180,10 @@ class Enderlights:
     def blue(self, value):
         for i in range(self.led_count):
             self[i] = (self[i][0], self[i][0], value)
+
+    def rgb(self, color):
+        for i in range(self.led_count):
+            self[i] = color
 
 
 def cycle(lights: Enderlights, size, step, value=(255, 255, 255)):
