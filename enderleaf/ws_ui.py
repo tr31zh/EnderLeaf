@@ -477,7 +477,8 @@ async def listen_for_updates(websocket, node_ip):
                 case MsgType.POSITION_PLOT:
                     node_ui.update_position_plot(image=soccket_message.image)
                 case MsgType.POSITION_DATA:
-                    print(soccket_message.x, soccket_message.y, soccket_message.z)
+                    pass
+                    # print(soccket_message.x, soccket_message.y, soccket_message.z)
                 case MsgType.FOCUS_PLOT:
                     node_ui.update_focus_plot(image=soccket_message.image)
                 case MsgType.CONFIG_DATA:
@@ -536,7 +537,7 @@ async def execute_on_node(uri, func_name, **kwargs):
         ) as websocket:
             asyncio.create_task(listen_for_updates(websocket, uri))
             message = {"func": func_name, "kwargs": kwargs}
-            print(message)
+            # print(message)
             await websocket.send(json.dumps(message))
             await asyncio.wait_for(
                 completion_events[uri].wait(),

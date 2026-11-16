@@ -199,12 +199,14 @@ class EnderLeafController(object):
         else:
             return True
 
-    async def identify(self, color, wait):
+    async def identify(self, color:tuple, wait:float):
         try:
             self.top_lights.rgb(color=color)
-            _ = await self.capture_array()
+            await asyncio.sleep(0.2)
+            await self.capture_array()
             await asyncio.sleep(wait)
             self.top_lights.rgb(color=(255, 255, 255))
+            await asyncio.sleep(0.2)
             await self.capture_array()
         except Exception as e:
             await self.send_problem(
