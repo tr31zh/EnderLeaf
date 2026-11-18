@@ -11,6 +11,12 @@ import logging
 import random
 import sys
 from dataclasses import dataclass
+import json
+import socket
+import paramiko
+import signal
+import traceback
+import shutil
 
 import numpy as np
 from PIL import Image
@@ -26,29 +32,53 @@ ROOT_FOLDER = Path(__file__).parent.parent
 sys.path.append(str(ROOT_FOLDER))
 os.chdir(str(ROOT_FOLDER))
 
-from enderleaf.const import DEFAULT_DATETIME_FORMAT
+from enderleaf.const import (
+    DEFAULT_DATETIME_FORMAT,
+    PT_IMAGES_RECEIVED,
+    PT_IMAGES_VALIDATED,
+)
 from enderleaf.enums import (
     MsgType,
     LogLevel,
     ControllerCommands,
     NodeViewOption,
     LaunchOptons,
+    FileTransferStatus,
 )
 from enderleaf.socket_message import SocketMessage
-from enderleaf.image import encode_image
-from enderleaf.tools import build_color_steps
+from enderleaf.image import encode_image, load_image
+from enderleaf.tools import (
+    build_color_steps,
+    ensure_folder,
+    list_remote_files,
+    list_remote_folders,
+    read_dataframe,
+)
+
+try:
+    with open(
+        str(Path(".").joinpath("addons").joinpath("conf").joinpath("addresses.json")),
+        "r",
+    ) as file:
+        addresses = json.load(file)
+except:
+    addresses = {}
+
 
 LOCAL_CLIENTS = False
-if LOCAL_CLIENTS is True:
+if LOCAL_CLIENTS is True or not addresses:
     NUM_NODES = 4
     PORTS = [i + 8760 for i in range(NUM_NODES)]
     NODES = [f"ws://localhost:{p}" for p in PORTS]
+    MAIN_NODE = True
 else:
-    IPS = ["ws://147.100.144.150", "ws://147.100.144.195"]
-    NODES = [f"{ip}:8765" for ip in IPS]
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect(("1.2.3.4", 1))
+    MAIN_NODE = s.getsockname()[0] == addresses.get("main", "")
+    NODES = [f"ws://{ip}:8765" for ip in addresses["nodes"]]
 
 ID_COLORS = build_color_steps(step_count=len(NODES))
-ID_TIME = 2
+ID_TIME = 4
 BORDER_RADIUS = 6
 BTN_HEIGHT = 40
 PATH_LOG = Path(__file__).resolve().parent.parent.joinpath("logs")
@@ -114,40 +144,47 @@ def level_to_color(level: LogLevel | int):
             return None
 
 
-def log(level, message: str, node_ip: str | None = None):
+def log(level, message: str, node_address: str | None = None):
     msg = f"{dt.now().strftime(DEFAULT_DATETIME_FORMAT)} | "
-    if node_ip is not None:
-        msg = f"{msg} [{node_ip}] "
+    if node_address is not None:
+        msg = f"{msg} [{node_address}] "
     show_log = False
     match level:
         case LogLevel.DEBUG:
-            msg += "🐞 "
-            logger.debug(msg)
+            logger.debug(f"[{node_address}] {message}")
         case LogLevel.INFO:
-            msg += "ℹ️ "
-            logger.info(msg)
+            logger.info(f"[{node_address}] {message}")
         case LogLevel.WARNING:
-            msg += "⚠️ "
-            logger.warning(msg)
+            logger.warning(f"[{node_address}] {message}")
         case LogLevel.EXCEPTION:
-            msg += "🤬 "
-            logger.exception(msg)
+            logger.exception(f"[{node_address}] {message}")
             show_log = True
         case LogLevel.ERROR:
-            msg += "⛔️ "
-            logger.error(msg)
+            logger.error(f"[{node_address}] {message}")
             show_log = True
         case LogLevel.CRITICAL:
-            msg += "☢️ "
-            logger.critical(msg)
+            logger.critical(f"[{node_address}] {message}")
             show_log = True
         case _:
-            msg += "⁉️ "
-            logger.critical(msg)
+            logger.critical(f"[{node_address}] {message}")
             show_log = True
-    msg = f"{msg}{message}"
+    match level:
+        case LogLevel.DEBUG:
+            msg += "🐞 "
+        case LogLevel.INFO:
+            msg += "ℹ️ "
+        case LogLevel.WARNING:
+            msg += "⚠️ "
+        case LogLevel.EXCEPTION:
+            msg += "🤬 "
+        case LogLevel.ERROR:
+            msg += "⛔️ "
+        case LogLevel.CRITICAL:
+            msg += "☢️ "
+        case _:
+            msg += "⁉️ "
     log_view.controls.append(
-        ft.Text(msg, color=level_to_color(level=level), expand=True)
+        ft.Text(f"{msg}{message}", color=level_to_color(level=level), expand=True)
     )
     if show_log is True and chk_show_log.value is False:
         chk_show_log.value = True
@@ -229,11 +266,12 @@ class ConfUnit:
 
 
 class NodeUi:
-    def __init__(self, node_ip, id_color):
-        self.node_ip = node_ip
+    def __init__(self, node_address: str, id_color):
+        self.node_address = node_address
+        self.ip = node_address.replace("ws://", "").split(":")[0]
         self.id_color = id_color
         self.title = ft.Checkbox(
-            label=node_ip,
+            label=self.ip,
             value=True,
             label_style=ft.TextStyle(size=20, bgcolor=COLOUR_BACKGROUND),
             on_change=self.on_change_enabled,
@@ -282,6 +320,22 @@ class NodeUi:
             ],
             rows=[],
         )
+        self._ft_status = FileTransferStatus.ACTIVE
+        self.ft_status_text = ft.Text("Starting node...")
+        self.ft_progress_txt = ft.Text("Transfer progress", width=200)
+        self.ft_progress = ft.ProgressBar(
+            value=0, bar_height=10, expand=True, height=12
+        )
+        self.ft_feedback = ft.Column(
+            controls=[
+                ft.Text(self.ip, weight=ft.FontWeight.BOLD, expand=True),
+                self.ft_status_text,
+                self.ft_progress_txt,
+                self.ft_progress,
+                ft.Divider(),
+            ],
+            expand=True,
+        )
 
         self.tab_bar = ft.TabBar(
             tabs=[
@@ -310,7 +364,7 @@ class NodeUi:
             icon_size=36,
             padding=ft.Padding.all(0),
         )
-        self.expand_toggle.node_ip = self.node_ip
+        self.expand_toggle.node_address = self.node_address
         self.progress = ft.ProgressBar(value=0, bar_height=10, expand=False, height=12)
         self.alert = ft.Text(value="Ready", expand=False)
         self._fullscreen = False
@@ -340,23 +394,6 @@ class NodeUi:
 
         self.max_level = 0
 
-    @property
-    def ui(self):
-        return self._ui
-
-    @property
-    def fullscreen(self):
-        return self._fullscreen
-
-    @fullscreen.setter
-    def fullscreen(self, value):
-        if value != self._fullscreen:
-            self._fullscreen = not self._fullscreen
-            self.title.visible = not self._fullscreen
-            self.expand_toggle.visible = not self._fullscreen
-            self.title.update()
-            self.expand_toggle.update()
-
     async def switch_main_view(self, new_view: NodeViewOption):
         match new_view:
             case NodeViewOption.IMAGE:
@@ -368,7 +405,7 @@ class NodeUi:
             case NodeViewOption.CONFIG:
                 await self.main_view.move_to(3)
             case _:
-                raise NotImplementedError(f"Unknown node view mode: {e.control.value}")
+                raise NotImplementedError(f"Unknown node view mode: {new_view.value}")
         self.main_view.update()
 
     def reset(self, message: str | None = None):
@@ -429,6 +466,211 @@ class NodeUi:
                 )
             )
 
+    async def transfer_files(self):
+        ssh = paramiko.SSHClient()
+        try:
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            pk_file = Path.home().joinpath(".ssh/id_ed25519")
+            ssh.connect(
+                self.ip,
+                username="ender",
+                pkey=paramiko.Ed25519Key.from_private_key_file(pk_file),
+            )
+            while True:
+                match self.ft_status:
+                    case FileTransferStatus.ACTIVE:
+                        pass
+                    case FileTransferStatus.STANDBY:
+                        await asyncio.sleep(10)
+                        if self.ft_status == FileTransferStatus.STANDBY:
+                            self.ft_status = FileTransferStatus.ACTIVE
+                        else:
+                            continue
+                    case FileTransferStatus.PAUSED:
+                        await asyncio.sleep(10)
+                        continue
+                    case FileTransferStatus.STOPPED | FileTransferStatus.FINISHED:
+                        await asyncio.sleep(0)
+                        break
+                    case _:
+                        raise NotADirectoryError(
+                            f"Unknwon file transfer status: '{self.ft_status}"
+                        )
+                sftp = ssh.open_sftp()
+                try:
+                    sftp.stat("/home/ender/code/EnderLeaf/output")
+                except FileNotFoundError:
+                    log(
+                        level=LogLevel.INFO,
+                        message="No image folder on remote.",
+                        node_address=self.ip,
+                    )
+                    if self.ft_status == FileTransferStatus.ACTIVE:
+                        self.ft_status = FileTransferStatus.STANDBY
+                    continue
+                try:
+                    for src_fld in list_remote_folders(
+                        sftp, "/home/ender/code/EnderLeaf/output"
+                    ):
+                        ensure_folder(
+                            PT_IMAGES_RECEIVED.joinpath(
+                                *src_fld.parts[src_fld.parts.index("output") + 1 :]
+                            )
+                        )
+                        ensure_folder(
+                            PT_IMAGES_VALIDATED.joinpath(
+                                *src_fld.parts[src_fld.parts.index("output") + 1 :]
+                            )
+                        )
+                    src_files = list_remote_files(
+                        sftp, "/home/ender/code/EnderLeaf/output"
+                    )
+                    to_delete_files = []
+                    for i, src_file in enumerate(src_files):
+                        if self.ft_status in [
+                            FileTransferStatus.STOPPED,
+                            FileTransferStatus.FINISHED,
+                        ]:
+                            break
+                        if self.ft_status == FileTransferStatus.PAUSED:
+                            while self.ft_status == FileTransferStatus.PAUSED:
+                                await asyncio.sleep(10)
+                            if self.ft_status != FileTransferStatus.ACTIVE:
+                                break
+                        self.ft_progress.value = (i + 1) / len(src_files)
+                        self.ft_progress.update()
+                        self.ft_progress_txt.value = (
+                            f"Transfer progress ({i+1}/{len(src_files)})"
+                        )
+                        self.ft_progress_txt.update()
+                        await asyncio.sleep(0)
+                        received_file = PT_IMAGES_RECEIVED.joinpath(
+                            *src_file.parts[src_file.parts.index("output") + 1 :]
+                        )
+                        validated_file = PT_IMAGES_VALIDATED.joinpath(
+                            *src_file.parts[src_file.parts.index("output") + 1 :]
+                        )
+                        if not validated_file.is_file() and (
+                            not received_file.is_file()
+                            or received_file.stat().st_size
+                            != sftp.stat(str(src_file)).st_size
+                        ):
+                            sftp.get(str(src_file), str(received_file))
+                            if (
+                                received_file.stat().st_size
+                                != sftp.stat(str(src_file)).st_size
+                            ):
+                                received_file.unlink()
+                                continue
+                            try:
+                                if received_file.suffix == ".csv":
+                                    read_dataframe(received_file)
+                                elif received_file.suffix == ".png":
+                                    load_image(received_file)
+                            except Exception as e:
+                                log(
+                                    level=LogLevel.WARNING,
+                                    message=f"Received corrupted file '{str(received_file)}' wieth error '{str(e)}'",
+                                    node_address=self.ip,
+                                )
+                                received_file.unlink()
+                                continue
+                            else:
+                                received_file.rename(validated_file)
+                        if (
+                            validated_file.is_file()
+                            and validated_file.stat().st_size
+                            == sftp.stat(str(src_file)).st_size
+                        ):
+                            to_delete_files.append(src_file)
+                    for d_file in to_delete_files:
+                        sftp.remove(str(d_file))
+                except Exception as e:
+                    log(level=LogLevel.ERROR, message=f"SFTP exception: {str(e)}")
+                finally:
+                    if self.ft_status == FileTransferStatus.ACTIVE:
+                        self.ft_status = FileTransferStatus.STANDBY
+                    sftp.close()
+        except Exception as e:
+            log(level=LogLevel.ERROR, message=f"SSH exception: {str(e)}")
+        finally:
+            ssh.close()
+            self.ft_status = FileTransferStatus.FINISHED
+
+    @property
+    def working(self):
+        return self.working_spin.visible is True
+
+    @property
+    def ui(self):
+        return self._ui
+
+    @property
+    def fullscreen(self):
+        return self._fullscreen
+
+    @fullscreen.setter
+    def fullscreen(self, value):
+        if value != self._fullscreen:
+            self._fullscreen = not self._fullscreen
+            self.title.visible = not self._fullscreen
+            self.expand_toggle.visible = not self._fullscreen
+            self.title.update()
+            self.expand_toggle.update()
+
+    @property
+    def ft_status(self):
+        return self._ft_status
+
+    @ft_status.setter
+    def ft_status(self, value):
+        # if (
+        #     self._ft_status == FileTransferStatus.PAUSED
+        #     and value == FileTransferStatus.ACTIVE
+        # ):
+        #     print(traceback.print_stack())
+        # print(f"{self._ft_status} -> {value}")
+        if self._ft_status == FileTransferStatus.STOPPED and value not in [
+            FileTransferStatus.STOPPED,
+            FileTransferStatus.FINISHED,
+        ]:
+            log(
+                level=LogLevel.WARNING,
+                message=f"Stopping file transfer, switching to {value} not allowed",
+                node_address=self.ip,
+            )
+            return
+        if (
+            self._ft_status == FileTransferStatus.FINISHED
+            and value != FileTransferStatus.FINISHED
+        ):
+            log(
+                level=LogLevel.WARNING,
+                message=f"File transfer finished, switching to {value} not allowed",
+                node_address=self.ip,
+            )
+            return
+
+        self._ft_status = value
+        self.ft_status_text.value = self._ft_status.value
+        match self._ft_status:
+            case FileTransferStatus.ACTIVE:
+                message = "Starting file transfer"
+            case FileTransferStatus.STANDBY:
+                message = "No more images to transfer, will check again soon"
+            case FileTransferStatus.PAUSED:
+                message = "Node busy, deffering file transfer"
+            case FileTransferStatus.STOPPED:
+                message = "Stopping transfer files task"
+            case FileTransferStatus.FINISHED:
+                message = "Application closing, stopping all transfers"
+            case _:
+                raise NotADirectoryError(
+                    f"Unknwon file transfer status: '{self._ft_status}"
+                )
+        log(level=LogLevel.INFO, message=message, node_address=self.ip)
+        self.ft_status_text.update()
+
 
 node_uis = {k: NodeUi(k, id_color=ID_COLORS[i]) for i, k in enumerate(NODES)}
 
@@ -447,17 +689,17 @@ class EnderButton(ft.Button):
     height: int = BTN_HEIGHT
 
 
-async def job_done(node_ip):
-    node_uis[node_ip].working_spin.visible = False
-    node_uis[node_ip].working_spin.update()
-    completion_events[node_ip].set()
+async def job_done(node_address):
+    node_uis[node_address].working_spin.visible = False
+    node_uis[node_address].working_spin.update()
+    completion_events[node_address].set()
 
 
-async def listen_for_updates(websocket, node_ip):
+async def listen_for_updates(websocket, node_address):
     try:
         async for message in websocket:
             soccket_message = SocketMessage.load(message)
-            node_ui = node_uis[node_ip]
+            node_ui = node_uis[node_address]
             match soccket_message.type:
                 case MsgType.MESSAGE:
                     node_ui.update_alert(
@@ -466,7 +708,7 @@ async def listen_for_updates(websocket, node_ip):
                     log(
                         level=LogLevel.INFO,
                         message=soccket_message.message,
-                        node_ip=node_ip,
+                        node_address=node_address,
                     )
                 case MsgType.PROGRESS:
                     node_ui.update_progress(
@@ -492,9 +734,9 @@ async def listen_for_updates(websocket, node_ip):
                     log(
                         level=soccket_message.level,
                         message=soccket_message.message,
-                        node_ip=node_ip,
+                        node_address=node_address,
                     )
-                    await job_done(node_ip=node_ip)
+                    await job_done(node_address=node_address)
                 case MsgType.PROBLEM:
                     node_ui.update_alert(
                         log_level=soccket_message.level, message=soccket_message.message
@@ -502,31 +744,31 @@ async def listen_for_updates(websocket, node_ip):
                     log(
                         level=soccket_message.level,
                         message=soccket_message.message,
-                        node_ip=node_ip,
+                        node_address=node_address,
                     )
                     if soccket_message.level in [LogLevel.ERROR, LogLevel.CRITICAL]:
-                        await job_done(node_ip=node_ip)
+                        await job_done(node_address=node_address)
                 case _:
                     log(
                         level=LogLevel.CRITICAL,
                         message=f"Unknown message type '{str(soccket_message.type)}'",
-                        node_ip=node_ip,
+                        node_address=node_address,
                     )
                     node_ui.update_alert(
                         log_level=soccket_message.level,
                         message=f"Unknown message type '{str(soccket_message.type)}'",
                     )
-                    await job_done(node_ip=node_ip)
+                    await job_done(node_address=node_address)
     except websockets.exceptions.ConnectionClosed:
         log(
             level=LogLevel.ERROR,
-            message=f"[{node_ip}] Connection closed unexpectedly",
+            message=f"[{node_address}] Connection closed unexpectedly",
         )
-        await job_done(node_ip=node_ip)
+        await job_done(node_address=node_address)
     except Exception as e:
         log(
             level=LogLevel.ERROR,
-            message=f"[{node_ip}] Exception while listening for update {str(soccket_message)}: {str(e)}",
+            message=f"[{node_address}] Exception while listening for update {str(soccket_message)}: {str(e)}",
         )
 
 
@@ -539,28 +781,22 @@ async def execute_on_node(uri, func_name, **kwargs):
             message = {"func": func_name, "kwargs": kwargs}
             # print(message)
             await websocket.send(json.dumps(message))
-            await asyncio.wait_for(
-                completion_events[uri].wait(),
-                timeout=(
-                    5
-                    if func_name
-                    in [
-                        ControllerCommands.PING,
-                        ControllerCommands.GET_CONFIG,
-                        ControllerCommands.IDENTIFY,
-                    ]
-                    else (
-                        60
-                        if func_name in [ControllerCommands.CONNECT_PRINTER]
-                        else None
-                    )
-                ),
-            )
+            match func_name:
+                case ControllerCommands.PING | ControllerCommands.GET_CONFIG:
+                    time_out = 5
+                case ControllerCommands.IDENTIFY:
+                    time_out = 10
+                case ControllerCommands.CONNECT_PRINTER:
+                    time_out = 60
+                case _:
+                    time_out = None
+
+            await asyncio.wait_for(completion_events[uri].wait(), timeout=time_out)
     except asyncio.TimeoutError as e:
         log(
             level=LogLevel.ERROR,
             message=f"Timeout error for '{func_name}': {str(e)}",
-            node_ip=uri,
+            node_address=uri,
         )
         node_uis[uri].update_alert(
             log_level=LogLevel.EXCEPTION,
@@ -570,7 +806,7 @@ async def execute_on_node(uri, func_name, **kwargs):
         log(
             level=LogLevel.ERROR,
             message=f"Connection/Execution failed: {e}",
-            node_ip=uri,
+            node_address=uri,
         )
         node_uis[uri].update_alert(
             log_level=LogLevel.ERROR,
@@ -585,7 +821,7 @@ async def run_task(task_name: ControllerCommands = ControllerCommands.START):
         message=(
             f"Initiating distributed execution for task: '{task_name}'"
             if fs_node is None
-            else f"Initializing task for single node {fs_node.node_ip}"
+            else f"Initializing task for single node {fs_node.node_address}"
         ),
     )
     await set_disable(True, is_stop_enabled=task_name == ControllerCommands.START)
@@ -595,7 +831,10 @@ async def run_task(task_name: ControllerCommands = ControllerCommands.START):
         case ControllerCommands.MOVE_TO:
             kwargs["position"] = int(dd_position.value)
         case ControllerCommands.START:
-            kwargs["launch_options"] = [LaunchOptons.PRECISE_FOCUS, LaunchOptons.CENTER_OL]
+            kwargs["launch_options"] = [
+                LaunchOptons.PRECISE_FOCUS,
+                LaunchOptons.CENTER_OL,
+            ]
         case ControllerCommands.CENTER_ON_QR_CODE | ControllerCommands.CHECK_CORNERS:
             kwargs["launch_options"] = [LaunchOptons.PRECISE_FOCUS]
     if fs_node is None:
@@ -609,13 +848,15 @@ async def run_task(task_name: ControllerCommands = ControllerCommands.START):
                 continue
             tasks.append(
                 asyncio.create_task(
-                    execute_on_node(node_ui.node_ip, task_name, **kwargs)
+                    execute_on_node(node_ui.node_address, task_name, **kwargs)
                 )
             )
     else:
         fs_node.reset(f"{task_name} in progress...")
         tasks.append(
-            asyncio.create_task(execute_on_node(fs_node.node_ip, task_name, **kwargs))
+            asyncio.create_task(
+                execute_on_node(fs_node.node_address, task_name, **kwargs)
+            )
         )
     await asyncio.gather(*tasks)
     log(
@@ -623,7 +864,7 @@ async def run_task(task_name: ControllerCommands = ControllerCommands.START):
         message=(
             f"Task '{task_name}', all nodes completed."
             if fs_node is None
-            else f"Task '{task_name}' completed for single node {fs_node.node_ip}"
+            else f"Task '{task_name}' completed for single node {fs_node.node_address}"
         ),
     )
     for event in completion_events.values():
@@ -656,12 +897,15 @@ async def set_disable(is_disable: bool, is_stop_enabled: bool):
     spin_working.visible = is_disable
     spin_working.update()
     is_fullscreen = fullscreen_node() is not None
-    for uri in NODES:
-        node_uis[uri].title.disabled = is_disable
-        node_uis[uri].title.update()
+    for nu in node_uis.values():
+        nu.title.disabled = is_disable
+        nu.title.update()
+        nu.ft_status = (
+            FileTransferStatus.PAUSED if is_disable else FileTransferStatus.ACTIVE
+        )
         if is_fullscreen is False:
-            node_uis[uri].working_spin.visible = is_disable
-            node_uis[uri].working_spin.update()
+            nu.working_spin.visible = is_disable
+            nu.working_spin.update()
     bt_stop.disabled = not is_stop_enabled
     bt_stop.update()
 
@@ -785,6 +1029,28 @@ ep_extra_controls = ft.ExpansionTile(
     ),
 )
 
+if MAIN_NODE is True:
+    ep_file_transfer = ft.ExpansionTile(
+        title=ft.Text("File transfers"),
+        controls_padding=ft.Padding.symmetric(horizontal=4, vertical=4),
+        # affinity=ft.TileAffinity.PLATFORM,
+        # maintain_state=False,
+        shape=ft.RoundedRectangleBorder(
+            side=ft.BorderSide(width=1), radius=BORDER_RADIUS
+        ),
+        collapsed_shape=ft.RoundedRectangleBorder(
+            side=ft.BorderSide(width=1), radius=BORDER_RADIUS
+        ),
+        controls=ft.Column(
+            controls=[
+                ft.Row(node.ft_feedback, expand=True) for node in node_uis.values()
+            ],
+            expand=True,
+            intrinsic_width=True,
+        ),
+        expanded=True,
+    )
+
 gv_nodes = ft.GridView(
     spacing=10,
     scroll=ft.ScrollMode.ALWAYS,
@@ -795,22 +1061,26 @@ gv_nodes = ft.GridView(
     runs_count=min(len(NODES), 2),
 )
 
+sb_controls = [
+    ft.Row(spin_working),
+    ft.Row(bt_connect_printer),
+    ft.Row(bt_ping),
+    ft.Row(bt_identify),
+    ft.Row(bt_home),
+    ft.Row(bt_idle),
+    ft.Row(bt_park),
+    ft.Row(controls=[ft.Text("View: "), dd_view]),
+    ft.Row(controls=[chk_show_log]),
+    ep_extra_controls,
+    ft.Text("Acquisition Job", size=16),
+    ft.Row([bt_launch, bt_stop]),
+]
+if MAIN_NODE:
+    sb_controls.append(ep_file_transfer)
+
 side_buttons = ft.Column(
     intrinsic_width=True,
-    controls=[
-        ft.Row(spin_working),
-        ft.Row(bt_connect_printer),
-        ft.Row(bt_ping),
-        ft.Row(bt_identify),
-        ft.Row(bt_home),
-        ft.Row(bt_idle),
-        ft.Row(bt_park),
-        ft.Row(controls=[ft.Text("View: "), dd_view]),
-        ft.Row(controls=[chk_show_log]),
-        ep_extra_controls,
-        ft.Text("Acquisition Job", size=16),
-        ft.Row([bt_launch, bt_stop]),
-    ],
+    controls=sb_controls,
     auto_scroll=True,
     scroll=ft.ScrollMode.ADAPTIVE,
 )
@@ -837,8 +1107,8 @@ def global_page() -> ft.View:
 
 
 def fullscren_page(route) -> ft.View:
-    node_ip = route[1:]
-    node = node_uis[node_ip]
+    node_address = route[1:]
+    node = node_uis[node_address]
     node.fullscreen = True
     return ft.View(
         route=route,
@@ -852,7 +1122,7 @@ def fullscren_page(route) -> ft.View:
                             ft.Column(
                                 controls=[
                                     ft.AppBar(
-                                        title=ft.Text(node_ip),
+                                        title=ft.Text(node_address),
                                         bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
                                     ),
                                     node.ui,
@@ -905,8 +1175,8 @@ async def main(page: ft.Page):
     page.update()
 
     async def go_fullscreen(e: ft.Event[ft.IconButton]):
-        # log(level=LogLevel.DEBUG, message=str(e.control.node_ip))
-        await page.push_route(f"/{e.control.node_ip}")
+        # log(level=LogLevel.DEBUG, message=str(e.control.node_address))
+        await page.push_route(f"/{e.control.node_address}")
 
     for nu in node_uis.values():
         nu.expand_toggle.on_click = go_fullscreen
@@ -938,6 +1208,32 @@ async def main(page: ft.Page):
     page.on_view_pop = view_pop
 
     chk_show_log.on_change = on_change_log_visibility
+
+    if MAIN_NODE is True:
+        transfer_files_tasks = [
+            page.run_task(node.transfer_files) for node in node_uis.values()
+        ]
+
+        async def on_disconnect(e):
+            print("Entering disconnect")
+            for nu in node_uis.values():
+                nu.ft_status = FileTransferStatus.STOPPED
+            while True:
+                waiting_count = 0
+                for nu in node_uis.values():
+                    if nu.ft_status != FileTransferStatus.FINISHED:
+                        waiting_count += 1
+                await asyncio.sleep(2)
+                if waiting_count == 0:
+                    break
+                print(f"Waiting for {waiting_count} nodes to finish pending transfers")
+                log(
+                    level=LogLevel.INFO,
+                    message=f"Waiting for {waiting_count} nodes to finish pending transfers",
+                )
+            print("exiting disconnect")
+
+        page.on_disconnect = on_disconnect
 
     route_change()
 

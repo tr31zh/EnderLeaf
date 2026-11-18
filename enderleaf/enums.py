@@ -2,18 +2,21 @@ from enum import Enum
 
 
 class FocusMode(Enum):
+    """Modes for adjusting the camera focus"""
     MANUAL = "MANUAL"
     HUNT = "HUNT"
     AUTO = "AUTO"
 
 
 class CropMode(Enum):
+    """Modes for image cropping and visualization"""
     CROP = "Cropped image"
     LINES = "Crop lines"
     IGNORE = "Ignore"
 
 
 class CameraState(Enum):
+    """Operational states of the camera"""
     IDLE = "idle"
     VIDEO = "video"
     STILL = "still"
@@ -21,12 +24,14 @@ class CameraState(Enum):
 
 
 class ELStatus(Enum):
+    """General system status of EnderLeaf"""
     IDLE = "Idle"
     JOB_IN_PROGRESS = "Job in progress"
     STOP_REQUESTED = "Stop requested"
 
 
 class ImageMergeMode(Enum):
+    """Aggregation modes for merging multiple images"""
     MIN = "min"
     MAX = "max"
     AVG = "avg"
@@ -34,6 +39,7 @@ class ImageMergeMode(Enum):
 
 
 class ImageMergeMethod(Enum):
+    """Color-space specific merge methods mapping a color space to its channel merge modes"""
     RGB = ("rgb", [ImageMergeMode.MIN, ImageMergeMode.MIN, ImageMergeMode.MIN])
     HSV = ("hsv", [ImageMergeMode.MEDIAN, ImageMergeMode.MEDIAN, ImageMergeMode.MIN])
     LAB = ("lab", [ImageMergeMode.MIN, ImageMergeMode.MEDIAN, ImageMergeMode.MEDIAN])
@@ -45,6 +51,7 @@ class ImageMergeMethod(Enum):
 
 
 class CardPoint(Enum):
+    """Cardinal directions for light positioning"""
     NORTH = "NORTH"
     EAST = "EAST"
     SOUTH = "SOUTH"
@@ -71,6 +78,7 @@ LEN_LIGHTS_CONF = len(LIGHTS_CONF)
 
 
 class LightsCycle(Enum):
+    """Predefined lighting patterns"""
     OFF = [LIGHTS_CONF[0]]
     FULL = [LIGHTS_CONF[1]]
     ONE_FOURTH = [LIGHTS_CONF[2], LIGHTS_CONF[3], LIGHTS_CONF[4], LIGHTS_CONF[5]]
@@ -79,6 +87,7 @@ class LightsCycle(Enum):
 
 
 class MsgType(str, Enum):
+    """Types of messages sent between system nodes"""
     PROGRESS = "PROGRESS".lower()
     RESULT = "RESULT".lower()
     IMAGE = "IMAGE".lower()
@@ -91,6 +100,7 @@ class MsgType(str, Enum):
 
 
 class LogLevel(str, Enum):
+    """Logging levels with conversion utilities to/from integers"""
     DEBUG = "debug"
     INFO = "info"
     WARNING = "warning"
@@ -100,6 +110,7 @@ class LogLevel(str, Enum):
 
     @staticmethod
     def log_level_to_int(log_level) -> int:
+        """Convert a LogLevel enum to its corresponding integer value"""
         match log_level:
             case LogLevel.DEBUG:
                 return 10
@@ -118,6 +129,7 @@ class LogLevel(str, Enum):
 
     @staticmethod
     def int_to_log_level(value: int):
+        """Convert an integer value back to its corresponding LogLevel enum"""
         match value:
             case 10:
                 return LogLevel.DEBUG
@@ -136,12 +148,14 @@ class LogLevel(str, Enum):
 
 
 class LaunchOptons(str, Enum):
+    """Options available when launching a job"""
     PRECISE_FOCUS = "Precise focus"
     SWITCH_STATE = "Switch camera state"
     CENTER_OL = "Center on leaf"
 
 
 class ControllerCommands(str, Enum):
+    """Commands that can be sent to the system controller"""
     START = "Start"
     STOP = "Stop"
     PING = "Ping"
@@ -162,7 +176,18 @@ class ControllerCommands(str, Enum):
     GET_CONFIG = "Get config"
 
 class NodeViewOption(str, Enum):
+    """View options for the node interface"""
     IMAGE = "Image"
     PLOT_POSITION = "Position"
     PLOT_FOCUS = "Focus"
     CONFIG = "Config"
+    FILE_TRANFER = "File transfer"
+
+
+class FileTransferStatus(str, Enum):
+    """Status options for the file transfer task"""
+    ACTIVE = "File tranfer in progress"
+    STANDBY = "File transfer on standby"
+    PAUSED = "File transfer paused"
+    STOPPED = "File transfer stopped"
+    FINISHED = "All transfers cancelled"

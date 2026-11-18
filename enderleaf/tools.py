@@ -3,6 +3,9 @@ from timeit import default_timer as timer
 from datetime import datetime as dt
 import psutil
 import math
+import stat
+
+import paramiko
 
 import pandas as pd
 
@@ -48,7 +51,7 @@ def format_datetime(t=None, time_format=TIME_FORMAT):
     return dt.now().strftime(time_format) if t is None else t.strftime(time_format)
 
 
-def ensure_folder(forced_path: Path, return_string: bool = False) -> str | Path:
+def ensure_folder(forced_path: Path | str, return_string: bool = False) -> str | Path:
     """Ensures that forced_path exists
 
     Args:
@@ -58,6 +61,8 @@ def ensure_folder(forced_path: Path, return_string: bool = False) -> str | Path:
     Returns:
         str | Path: Path to created folder
     """
+    if isinstance(forced_path, str):
+        forced_path = Path(forced_path)
     if forced_path.is_dir() is False:
         forced_path.mkdir(parents=True, exist_ok=True)
     return str(forced_path) if return_string is True else forced_path
@@ -121,3 +126,32 @@ def build_color_steps(step_count: int) -> list:
             scaled_rgb(mag=i, color_min=0, color_max=step_count)
             for i in range(step_count)
         ]
+
+
+def list_remote_files(sftp: paramiko.sftp_client.SFTPClient, path: str):
+    result = []
+    for item in sftp.listdir_attr(path):
+        if stat.S_ISREG(item.st_mode):
+            result.append(Path(path).joinpath(item.filename))
+        elif stat.S_ISDIR(item.st_mode):
+            result.extend(
+                list_remote_files(
+                    sftp=sftp, path=str(Path(path).joinpath(item.filename))
+                )
+            )
+        else:
+            pass
+    return result
+
+
+def list_remote_folders(sftp: paramiko.sftp_client.SFTPClient, path: str):
+    result = [Path(path)]
+    for item in sftp.listdir_attr(path):
+        if stat.S_ISDIR(item.st_mode):
+            result.extend(
+                list_remote_folders(
+                    sftp=sftp, path=str(Path(path).joinpath(item.filename))
+                )
+            )
+
+    return result

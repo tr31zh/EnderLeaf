@@ -21,6 +21,7 @@ dependencies = [
     "opencv-python>=4.13.0.92",
     "pandas>=3.0.2",
     "panel>=1.8.10",
+    "paramiko>=5.1.0",
     "plotly>=6.7.0",
     "pretty>=0.1",
     "pyserial>=3.5",

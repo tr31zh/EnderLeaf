@@ -1,3 +1,5 @@
+from pathlib import Path
+
 # MARK: Colors
 C_BLACK = (0, 0, 0)
 C_BLUE = (255, 0, 0)
@@ -98,3 +100,13 @@ FM_METHODS = [
     FM_LAPV,
     FM_SFRQ,
 ]
+
+PT_ADDONS = Path(".").joinpath("addons")
+PT_CONF = PT_ADDONS.joinpath("conf")
+PT_ADDRESSES = PT_CONF.joinpath("addresses.json")
+
+PT_OUTPUT = Path(".").joinpath("output")
+
+PT_IMAGES = Path(".").joinpath("images")
+PT_IMAGES_RECEIVED = PT_IMAGES.joinpath("received")
+PT_IMAGES_VALIDATED = PT_IMAGES.joinpath("validated")

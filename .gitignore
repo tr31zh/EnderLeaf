@@ -228,3 +228,4 @@ qr_images
 *.zip
 *.tar
 .$*
+addons/conf/addresses.json
