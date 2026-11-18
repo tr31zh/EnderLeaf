@@ -19,6 +19,7 @@ controller = EnderLeafController()
 
 
 def sigint_handler(sig, frame):
+    """Handles SIGINT signal to ensure graceful shutdown of the controller"""
     print("")
     print("Stopping node")
     controller.close()
@@ -30,6 +31,12 @@ signal.signal(signal.SIGINT, sigint_handler)
 
 
 async def node_connect_printer(websocket, **kwargs):
+    """Websocket handler to connect the controller to the printer
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Optional arguments, such as 'port' for the printer connection
+    """
     controller.socket = websocket
     await websocket.send(
         SocketMessage(
@@ -49,6 +56,12 @@ async def node_connect_printer(websocket, **kwargs):
 
 
 async def node_ping(websocket, **kwargs):
+    """Websocket handler to ping the controller and verify connectivity
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Unused arguments
+    """
     controller.socket = websocket
     await websocket.send(
         result_message(
@@ -60,6 +73,12 @@ async def node_ping(websocket, **kwargs):
 
 
 async def node_identify(websocket, **kwargs):
+    """Websocket handler to identify the node using the LED ring color
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Optional identification parameters, LED color and display time
+    """
     controller.socket = websocket
     await websocket.send(
         result_message(
@@ -71,6 +90,12 @@ async def node_identify(websocket, **kwargs):
 
 
 async def node_get_config(websocket, **kwargs):
+    """Websocket handler to retrieve the node configuration
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Unused arguments
+    """
     controller.socket = websocket
     await websocket.send(
         SocketMessage(
@@ -88,6 +113,12 @@ async def node_get_config(websocket, **kwargs):
 
 
 async def node_go_home(websocket, **kwargs):
+    """Websocket handler to trigger the homing sequence
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Unused arguments
+    """
     controller.socket = websocket
     await websocket.send(
         SocketMessage(
@@ -105,6 +136,12 @@ async def node_go_home(websocket, **kwargs):
 
 
 async def node_go_idle(websocket, **kwargs):
+    """Websocket handler to move the sustem to the idle position
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Unused arguments
+    """
     controller.socket = websocket
     await websocket.send(
         SocketMessage(
@@ -122,6 +159,12 @@ async def node_go_idle(websocket, **kwargs):
 
 
 async def node_start(websocket, **kwargs):
+    """Websocket handler to start the image acquisition process
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Optional arguments, including 'launch_options' (list of LaunchOptons)
+    """
     controller.socket = websocket
     launch_options = kwargs.get("launch_options", [])
     await controller.launch_acquisition(
@@ -131,6 +174,12 @@ async def node_start(websocket, **kwargs):
 
 
 async def node_stop(websocket, **kwargs):
+    """Websocket handler to request stopping of the current operation
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Unused arguments
+    """
     controller.socket = websocket
     await websocket.send(
         SocketMessage(type=MsgType.MESSAGE, message="Stop requested").dump()
@@ -139,6 +188,12 @@ async def node_stop(websocket, **kwargs):
 
 
 async def node_capture_still(websocket, **kwargs):
+    """Websocket handler to capture a single still image
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Unused arguments
+    """
     controller.socket = websocket
     await controller.capture_array()
     await websocket.send(
@@ -147,6 +202,12 @@ async def node_capture_still(websocket, **kwargs):
 
 
 async def node_request_focus(websocket, **kwargs):
+    """Websocket handler to trigger an autofocus cycle
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Unused arguments
+    """
     controller.socket = websocket
     await websocket.send(
         result_message(
@@ -158,6 +219,12 @@ async def node_request_focus(websocket, **kwargs):
 
 
 async def node_request_focus_close(websocket, **kwargs):
+    """Websocket handler to set the focus to the closest position
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Unused arguments
+    """
     controller.socket = websocket
     await websocket.send(
         result_message(
@@ -169,6 +236,12 @@ async def node_request_focus_close(websocket, **kwargs):
 
 
 async def node_request_focus_far(websocket, **kwargs):
+    """Websocket handler to set the focus to farthest position
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Unused arguments
+    """
     controller.socket = websocket
     await websocket.send(
         result_message(
@@ -180,6 +253,12 @@ async def node_request_focus_far(websocket, **kwargs):
 
 
 async def node_go_park(websocket, **kwargs):
+    """Websocket handler to move the system to the parking position
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Unused arguments
+    """
     controller.socket = websocket
     await websocket.send(
         SocketMessage(
@@ -192,6 +271,12 @@ async def node_go_park(websocket, **kwargs):
 
 
 async def node_center_on_qr_code(websocket, **kwargs):
+    """Websocket handler to center the camera on a detected QR code
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Optional arguments, including 'launch_options' (list of LaunchOptons)
+    """
     controller.socket = websocket
     await websocket.send(
         SocketMessage(
@@ -209,6 +294,12 @@ async def node_center_on_qr_code(websocket, **kwargs):
 
 
 async def node_check_corners(websocket, **kwargs):
+    """Websocket handler to check the alignment of the plate corner leaf discs
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Optional arguments, including 'launch_options' (list of LaunchOptons)
+    """
     controller.socket = websocket
     await websocket.send(
         SocketMessage(
@@ -226,6 +317,12 @@ async def node_check_corners(websocket, **kwargs):
 
 
 async def node_toggle_lights(websocket, **kwargs):
+    """Websocket handler to toggle the system lighting state
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Unused arguments
+    """
     controller.socket = websocket
     await controller.shutter(controller.top_lights.mean == 0)
     await websocket.send(
@@ -234,6 +331,12 @@ async def node_toggle_lights(websocket, **kwargs):
 
 
 async def node_cycle_lights(websocket, **kwargs):
+    """Websocket handler to cycle through predefined lighting patterns
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Unused arguments
+    """
     controller.socket = websocket
     await controller.cycle_lights()
     await websocket.send(
@@ -242,6 +345,12 @@ async def node_cycle_lights(websocket, **kwargs):
 
 
 async def node_move_to(websocket, **kwargs):
+    """Websocket handler to move the stage to a specific position
+
+    Args:
+        websocket (WebSocketServerProtocol): Active websocket connection
+        **kwargs: Optional arguments, including 'position' (int)
+    """
     controller.socket = websocket
     position = kwargs.get("position", 1)
     await websocket.send(
@@ -277,6 +386,11 @@ FUNCTION_REGISTRY = {
 
 
 async def handler(websocket):
+    """Main websocket message handler that dispatches commands to the controller
+
+    Args:
+        websocket (WebSocketServerProtocol): The active websocket connection
+    """
     async for message in websocket:
         try:
             data = json.loads(message)
@@ -293,6 +407,7 @@ async def handler(websocket):
                 )
                 continue
 
+            # Execute the registered handler function
             await FUNCTION_REGISTRY[func_name](websocket, **kwargs)
         except json.JSONDecodeError:
             await websocket.send(
@@ -311,6 +426,7 @@ async def handler(websocket):
 
 
 async def main():
+    """Main entry point for the node server. Initializes the controller and starts the websocket server"""
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     host = "0.0.0.0"
     await controller.start()

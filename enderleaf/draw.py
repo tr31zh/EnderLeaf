@@ -71,6 +71,19 @@ def image_grid(
 
 
 def draw_circles(image, circles, thickness=12):
+    """Draws detected circles on the image with different colors based on their status
+
+    Args:
+        image (np.ndarray): Input image
+        circles (dict): Dictionary containing circle data:
+            - "accepted": list of (id, cx, cy, r)
+            - "discarded_position": list of (id, cx, cy, r)
+            - "discarded_accu": list of (id, cx, cy, r)
+        thickness (int, optional): Thickness of the circle lines. Defaults to 12.
+
+    Returns:
+        np.ndarray: Image with circles drawn
+    """
     out = image.copy()
     for _, cx, cy, r in circles["accepted"]:
         out = cv2.circle(out, (cx, cy), r, (0, 0, 0), thickness=thickness)
@@ -88,6 +101,18 @@ def resize_with_padding(
     out_height: int | None = None,
     interpolation: int = cv2.INTER_CUBIC,
 ) -> np.ndarray:
+    """Resizes an image and adds padding to maintain aspect ratio or reach target size
+
+    Args:
+        image (np.ndarray): Source image
+        max_size (int): Maximum dimension size
+        out_width (int | None, optional): Target output width. Defaults to None.
+        out_height (int | None, optional): Target output height. Defaults to None.
+        interpolation (int, optional): Interpolation method. Defaults to cv2.INTER_CUBIC.
+
+    Returns:
+        np.ndarray: Resized and padded image
+    """
     return A.Compose(
         [
             A.LongestMaxSize(max_size=max_size, p=1, interpolation=interpolation),
@@ -180,6 +205,15 @@ def concat_tile_resize(
 
 
 def plot_focus_plotly(df, width: int = 400):
+    """Plots focus values using Plotly
+
+    Args:
+        df (pd.DataFrame): DataFrame containing focus values with 'z' as index or column
+        width (int, optional): Width of the figure. Defaults to 400.
+
+    Returns:
+        plotly.graph_objects.Figure: Plotly figure
+    """
     fig = px.line(
         pd.melt(df, id_vars=["z"]),
         x="z",
@@ -194,6 +228,15 @@ def plot_focus_plotly(df, width: int = 400):
 
 
 def plot_focus_plt(df, width: int = 200):
+    """Plots focus values using Matplotlib and Seaborn
+
+    Args:
+        df (pd.DataFrame): DataFrame containing focus values with 'z' as index or column
+        width (int, optional): Figure width. Defaults to 200.
+
+    Returns:
+        Figure: Matplotlib figure
+    """
     df_melted = pd.melt(df, id_vars=["z"])
     fig = Figure(figsize=(4, 4))
     ax = fig.subplots(nrows=1, ncols=1)
@@ -215,6 +258,17 @@ def plot_images_with_histograms(
     fig_height: int = 4,
     titles: list | None = None,
 ):
+    """Plots images along with their color histograms for specified color spaces
+
+    Args:
+        images (list): List of images to plot
+        color_spaces (list, optional): List of color spaces to compute histograms for. Defaults to ["rgb"].
+        fig_height (int, optional): Height of the figure per image/histogram set. Defaults to 4.
+        titles (list | None, optional): Titles for the images. Defaults to None.
+
+    Returns:
+        Figure: Matplotlib figure containing images and histograms
+    """
     fig = Figure(
         figsize=(len(images) * fig_height, fig_height * (len(color_spaces) + 1))
     )

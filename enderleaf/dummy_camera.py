@@ -11,16 +11,23 @@ IMG_HEIGHT = 2592
 
 
 class JpegEncoder:
+    """Dummy JPEG encoder for simulation purposes"""
     def __init__(self):
         pass
 
 
 class FileOutput:
+    """Dummy file output for simulation purposes"""
     def __init__(self, dummy):
         pass
 
 
 class Picamera2(io.BufferedIOBase):
+    """Simulates a Raspberry Pi camera (Picamera2) and its streaming buffer
+    
+    This class mimics the behavior of the actual camera hardware, providing
+    simulated images and a producer-consumer buffer for streaming.
+    """
     def __init__(self, max_frames: int = 10):
         super().__init__()
         # Buffer
@@ -80,13 +87,15 @@ class Picamera2(io.BufferedIOBase):
         self.camera_controls = {"LensPosition": (0, 15, 1)}
 
     def start(self):
+        """Initializes the simulated camera"""
         pass
 
     def autofocus_cycle(self):
+        """Simulates an autofocus cycle"""
         pass
 
     def write(self, data: bytes) -> int:
-        """Producer calls this. Blocks if buffer is full."""
+        """Producer calls this to add a frame to the buffer. Blocks if buffer is full."""
         if self._closed:
             raise ValueError("I/O operation on closed stream")
         with self._not_full:
@@ -99,7 +108,7 @@ class Picamera2(io.BufferedIOBase):
         return len(data)
 
     def read(self, size: int = -1) -> bytes:
-        """Consumer calls this. Blocks if buffer is empty."""
+        """Consumer calls this to retrieve a frame from the buffer. Blocks if buffer is empty."""
         if self._closed and not self._buffer:
             return b""
         with self._not_empty:
@@ -112,7 +121,7 @@ class Picamera2(io.BufferedIOBase):
         return data
 
     def readinto(self, b: bytearray) -> int:
-        """Required by io.BufferedIOBase. Copies frame into provided buffer."""
+        """Copies a frame from the buffer into the provided bytearray"""
         data = self.read(len(b))
         if not data:
             return 0
@@ -120,25 +129,30 @@ class Picamera2(io.BufferedIOBase):
         return len(data)
 
     def seek(self, offset: int, whence: int = io.SEEK_SET):
+        """Unsupported operation for streaming buffer"""
         raise io.UnsupportedOperation("Seek not supported on streaming buffer")
 
     def tell(self) -> int:
+        """Unsupported operation for streaming buffer"""
         raise io.UnsupportedOperation("Tell not supported on streaming buffer")
 
     def flush(self):
+        """No-op for in-memory buffer"""
         pass  # In-memory buffer, no flushing needed
 
     def close(self):
-        """Signals EOF. Unblocks all waiting threads gracefully."""
+        """Signals EOF and unblocks all waiting threads in the producer-consumer cycle"""
         with self._lock:
             self._closed = True
             self._not_empty.notify_all()
             self._not_full.notify_all()
 
     def get_image_size(self, target):
+        """Returns the dimensions of the requested image target ('main' or 'raw')"""
         return self.camera_config[target]["size"]
 
     def get_color_from_index(self, index):
+        """Returns an RGB color based on an index, cycling through the HSV spectrum"""
         return (
             mpl_colors.hsv_to_rgb(
                 np.array([self.colors[index % len(self.colors)], 200, 200]) / 255
@@ -147,11 +161,12 @@ class Picamera2(io.BufferedIOBase):
         ).astype(np.uint8)
 
     def generate_image(self, color: tuple, target) -> bytes:
+        """Creates a solid color image of the requested size"""
         width, height = self.get_image_size(target)
         return np.full(shape=(height, width, 3), dtype=np.uint8, fill_value=color)
 
     def generate_frame(self, color: tuple) -> bytes:
-        """Generates a random RGB image and returns it as JPEG bytes."""
+        """Generates a solid color image and returns it as JPEG bytes for streaming"""
         img_bytes = io.BytesIO()
         Image.fromarray(self.generate_image(color, "main"), "RGB").save(
             img_bytes, format="JPEG", quality=85
@@ -159,7 +174,7 @@ class Picamera2(io.BufferedIOBase):
         return img_bytes.getvalue()
 
     def stream(self):
-        """Simulates PiCamera capturing and buffering generated frames."""
+        """Background thread loop that continuously generates and buffers frames"""
         while True:
             if self.stop_event.is_set() is True:
                 break
@@ -169,17 +184,20 @@ class Picamera2(io.BufferedIOBase):
                 )
                 self.color_index += 1
                 self.write(frame_bytes)
-                time.sleep(1 / 24)
+                time.sleep(1 / 24) # Simulate 24 FPS
             except ValueError:
                 break
 
     def create_video_configuration(self, raw: dict = {}, main: dict = {}):
+        """Dummy video configuration"""
         pass
 
     def create_still_configuration(self, raw: dict = {}, main: dict = {}):
+        """Dummy still configuration"""
         pass
 
     def capture_array(self, target):
+        """Generates a single image array for the specified target ('main' or 'raw')"""
         image = self.generate_image(
             color=self.get_color_from_index(self.color_index), target=target
         )
@@ -187,25 +205,32 @@ class Picamera2(io.BufferedIOBase):
         return image
 
     def capture_metadata(self):
+        """Returns dummy camera metadata"""
         return {"LensPosition": 15}
 
     def stop(self):
+        """Stops the simulated camera"""
         pass
 
     def switch_mode(self, dummy):
+        """Dummy mode switch"""
         pass
 
     def configure(self, conf):
+        """Dummy configuration update"""
         pass
 
     def set_controls(self, conf):
+        """Dummy control update"""
         pass
 
     def start_recording(self, encoder, output):
+        """Starts the simulated frame production thread"""
         self.stop_event.clear()
         self.prod_thread = Thread(target=self.stream, name="CameraThread")
         self.prod_thread.start()
 
     def stop_recording(self):
+        """Stops the simulated frame production thread"""
         self.stop_event.set()
         self.prod_thread.join()
