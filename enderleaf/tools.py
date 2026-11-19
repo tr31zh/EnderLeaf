@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from timeit import default_timer as timer
 from datetime import datetime as dt
@@ -155,3 +156,66 @@ def list_remote_folders(sftp: paramiko.sftp_client.SFTPClient, path: str):
             )
 
     return result
+
+
+def fsync_dir(path: Path | str):
+    """Flush a directory entry, making a create/rename inside it durable.
+
+    Directory metadata (a new file or a rename) is not guaranteed on disk until
+    the directory itself is synced. This is required so that a validated copy
+    survives a power loss that happens between writing it and deleting the
+    remote source.
+
+    Args:
+        path (Path | str): The directory to flush.
+    """
+    fd = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def validate_file_content(path: Path | str):
+    """Validate that a downloaded file holds readable content of its type.
+
+    CSV files are parsed and image files are decoded; an undecodable or
+    unparseable file raises so the caller can discard it instead of promoting
+    it to the validated folder.
+
+    Args:
+        path (Path | str): Path to the downloaded file to validate.
+
+    Raises:
+        ValueError: When the file cannot be decoded/parsed or its type is not
+            handled.
+    """
+    suffix = Path(path).suffix.lower()
+    if suffix == ".csv":
+        read_dataframe(path)
+    elif suffix in (".png", ".jpg", ".jpeg", ".tif", ".tiff"):
+        # Imported lazily to avoid a tools -> image import cycle at module load.
+        from enderleaf.image import load_image
+
+        image = load_image(path)
+        # A failed decode returns None rather than raising, so treat None as a
+        # hard error.
+        if image is None:
+            raise ValueError(f"Failed to decode image '{path}'")
+    else:
+        raise ValueError(f"Unrecognised file type '{suffix}' for '{path}'")
+
+
+def atomic_move(from_path: Path | str, to_path: Path | str):
+    """Move a file to a new location and make the move durable.
+
+    Performs an atomic rename followed by a directory sync so the destination
+    path is guaranteed to exist on stable storage before the caller proceeds
+    (for example, before deleting the remote source).
+
+    Args:
+        from_path (Path | str): The file to move.
+        to_path (Path | str): The destination path.
+    """
+    os.replace(str(from_path), str(to_path))
+    fsync_dir(to_path.parent)

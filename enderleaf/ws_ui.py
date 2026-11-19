@@ -53,8 +53,15 @@ from enderleaf.tools import (
     list_remote_files,
     list_remote_folders,
     read_dataframe,
+    atomic_move,
+    validate_file_content
 )
 
+# MARK: Node configuration
+# Load the node addresses from the shared configuration file. When the file is
+# missing or unreadable, fall back to an empty mapping so the local fallback
+# branch below can take over.
+# The json also contains the address of the main node which will receive images from all the other nodes
 try:
     with open(
         str(Path(".").joinpath("addons").joinpath("conf").joinpath("addresses.json")),
@@ -67,16 +74,22 @@ except:
 
 LOCAL_CLIENTS = False
 if LOCAL_CLIENTS is True or not addresses:
+    # Local/development mode: spawn a fixed number of nodes on sequential
+    # localhost ports and treat this client as the main (coordinating) node.
     NUM_NODES = 4
     PORTS = [i + 8760 for i in range(NUM_NODES)]
     NODES = [f"ws://localhost:{p}" for p in PORTS]
     MAIN_NODE = True
 else:
+    # Distributed mode: resolve the host's own IP address and compare it with the
+    # configured main node IP to decide whether this client is the main node.
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.connect(("1.2.3.4", 1))
     MAIN_NODE = s.getsockname()[0] == addresses.get("main", "")
     NODES = [f"ws://{ip}:8765" for ip in addresses["nodes"]]
 
+# MARK: UI configuration constants
+# Per-node identity colors, identify timing, and shared visual styling values.
 ID_COLORS = build_color_steps(step_count=len(NODES))
 ID_TIME = 4
 BORDER_RADIUS = 6
@@ -87,17 +100,29 @@ FULLSCREEN_COLOUR_ACCENT = ft.Colors.BLUE_100
 COLOUR_BACKGROUND = ft.Colors.SURFACE_CONTAINER_HIGH
 COLOUR_DETAIL = ft.Colors.GREY_600
 
+# One completion event per node, used to synchronise task execution across the
+# distributed nodes. Cleared after every run_task call.
 completion_events = {uri: asyncio.Event() for uri in NODES}
 
 
 # MARK: Log
 class MemoryFilter(logging.Filter):
+    """Logging filter that annotates each record with the process memory usage.
+
+    A class-level attribute tracks the previous memory percentage so that each
+    record can carry a trend indicator relative to the last logged record.
+
+    Attributes:
+        last_process_mem (float): Memory percentage captured for the previous
+            record. Used to compute the up/down/flat trend arrow.
+    """
 
     last_process_mem = 0
 
     def filter(self, record):
         process: psutil.Process = psutil.Process(os.getpid())
         pmp = process.memory_percent()
+        # Determine the memory trend relative to the previously recorded sample.
         sign = (
             "⬆"
             if pmp > self.last_process_mem
@@ -119,6 +144,12 @@ log_view = ft.ListView(
 
 
 def on_change_log_visibility(e: ft.Event[ft.Checkbox]):
+    """Toggle the visibility of the log view based on the checkbox state.
+
+    Args:
+        e (ft.Event[ft.Checkbox]): Event emitted when the "Show log" checkbox
+            value changes.
+    """
     log_view.visible = e.control.value is True
     log_view.update()
 
@@ -127,6 +158,16 @@ chk_show_log = ft.Checkbox(label="Show log", value=False, expand=True)
 
 
 def level_to_color(level: LogLevel | int):
+    """Map a log level to a Flet color used for alert emphasis.
+
+    Args:
+        level (LogLevel | int): The log level to map, either a LogLevel enum
+            member or a raw integer that is first converted to a LogLevel.
+
+    Returns:
+        ft.Color | None: A Flet color for warning-level-and-above entries, or
+        None when no emphasis color is required.
+    """
     if isinstance(level, int):
         level = LogLevel.int_to_log_level(level)
     match level:
@@ -145,10 +186,25 @@ def level_to_color(level: LogLevel | int):
 
 
 def log(level, message: str, node_address: str | None = None):
+    """Route a message to both the Python logger and the on-screen log view.
+
+    The message is logged through the configured logger at the given level and,
+    is additionally appended to the live
+    log view, for warning-level-and-above entries. 
+    If such an entry appears while the log view is hidden, the view
+    and its toggle checkbox are revealed automatically.
+
+    Args:
+        level (LogLevel): The severity level of the message.
+        message (str): The message text to log and display.
+        node_address (str | None, optional): Optional node address that, when
+            provided, is prefixed to the message. Defaults to None.
+    """
     msg = f"{dt.now().strftime(DEFAULT_DATETIME_FORMAT)} | "
     if node_address is not None:
         msg = f"{msg} [{node_address}] "
     show_log = False
+    # First dispatch: emit through the Python logger at the matching level.
     match level:
         case LogLevel.DEBUG:
             logger.debug(f"[{node_address}] {message}")
@@ -168,6 +224,7 @@ def log(level, message: str, node_address: str | None = None):
         case _:
             logger.critical(f"[{node_address}] {message}")
             show_log = True
+    # Second dispatch: pick the on-screen icon that mirrors the log level.
     match level:
         case LogLevel.DEBUG:
             msg += "🐞 "
@@ -200,14 +257,18 @@ log_file_handler = logging.FileHandler(
     mode="a",
     delay=True,
 )
+# Annotate every log line with the process memory trend.
 log_file_handler.addFilter(MemoryFilter())
 
+# Configure the root logger to write to the file handler with the memory-augmented
+# format string.
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s | %(mem_data)s | %(name)s | %(levelname)s] - %(message)s",
     handlers=[log_file_handler],
 )
 
+# Module-level logger used throughout this module.
 logger = logger = logging.getLogger(__name__)
 logger.info("")
 logger.info("==== Starting session ====")
@@ -215,7 +276,16 @@ logger.info("")
 
 
 def generate_frame(width=1280, height=720, color: tuple | list | None = None) -> bytes:
-    """Generates a random RGB image and returns it as JPEG bytes."""
+    """Generate a frame (image) with a solid color in byte format
+
+    Args:
+        width (int, optional): Frame width. Defaults to 1280.
+        height (int, optional): Frame height. Defaults to 720.
+        color (tuple | list | None, optional): Color in RGB format. Defaults to None.
+
+    Returns:
+        bytes: Image as bytes
+    """
     color = (
         color
         if color is not None
@@ -228,6 +298,12 @@ def generate_frame(width=1280, height=720, color: tuple | list | None = None) ->
 
 
 def get_hist_plot():
+    """Build a sample histogram figure used as placeholder plot content.
+
+    Returns:
+        matplotlib.figure.Figure: A figure containing a histogram of normally
+        distributed sample data.
+    """
     x = 4 + np.random.normal(0, 1.5, 200)
     fig, ax = plt.subplots()
     ax.hist(x, bins=8, linewidth=0.5, edgecolor="white")
@@ -238,6 +314,12 @@ def get_hist_plot():
 
 
 def get_hex_plot():
+    """Build a sample hexbin figure used as placeholder plot content.
+
+    Returns:
+        matplotlib.figure.Figure: A figure containing a hexbin plot of sample
+        correlated data.
+    """
     np.random.seed(1)
     x = np.random.randn(5000)
     y = 1.2 * x + np.random.randn(5000) / 3
@@ -248,6 +330,16 @@ def get_hex_plot():
 
 
 def plot_to_image(fig, dpi=300):
+    """Render a matplotlib figure into a raw pixel array.
+
+    Args:
+        fig (matplotlib.figure.Figure): The figure to render.
+        dpi (int, optional): Resolution in dots per inch used when rendering.
+            Defaults to 300.
+
+    Returns:
+        numpy.ndarray: The figure rendered as a raw uint8 image array.
+    """
     io_buf = io.BytesIO()
     fig.savefig(io_buf, format="raw")
     io_buf.seek(0)
@@ -261,15 +353,30 @@ def plot_to_image(fig, dpi=300):
 
 @dataclass
 class ConfUnit:
+    """A single configuration key/value pair for the config data table."""
+
     name: str
     value: str
 
 
 class NodeUi:
+    """UI container for a single EnderLeaf node.
+
+    Holds all Flet controls that make up a node's panel (image, plots, config
+    table, progress bars, alerts) and the methods that update them in response to
+    messages received from the corresponding node.
+
+    Attributes:
+        node_address (str): WebSocket address of the node.
+        ip (str): IP portion of the node address, extracted for display.
+        id_color: Color that uniquely identifies this node.
+    """
+
     def __init__(self, node_address: str, id_color):
         self.node_address = node_address
         self.ip = node_address.replace("ws://", "").split(":")[0]
         self.id_color = id_color
+        # Title checkbox also acts as the enable/disable toggle for this node.
         self.title = ft.Checkbox(
             label=self.ip,
             value=True,
@@ -304,6 +411,7 @@ class NodeUi:
             gapless_playback=True,
             expand=True,
         )
+        # Two-column table used to display the node's configuration.
         self.config = fdt.DataTable2(
             expand=True,
             columns=[
@@ -326,6 +434,7 @@ class NodeUi:
         self.ft_progress = ft.ProgressBar(
             value=0, bar_height=10, expand=True, height=12
         )
+        # Column shown in the main node's "File transfers" panel for this node.
         self.ft_feedback = ft.Column(
             controls=[
                 ft.Text(self.ip, weight=ft.FontWeight.BOLD, expand=True),
@@ -395,6 +504,11 @@ class NodeUi:
         self.max_level = 0
 
     async def switch_main_view(self, new_view: NodeViewOption):
+        """Switch the node's tabbed main view to the requested view.
+
+        Args:
+            new_view (NodeViewOption): The view to activate.
+        """
         match new_view:
             case NodeViewOption.IMAGE:
                 await self.main_view.move_to(0)
@@ -409,12 +523,23 @@ class NodeUi:
         self.main_view.update()
 
     def reset(self, message: str | None = None):
+        """Reset the node's alert to the ready state.
+
+        Args:
+            message (str | None, optional): Custom alert message. When None, the
+                default "Ready" message is used. Defaults to None.
+        """
         self.max_level = 0
         self.update_alert(
             log_level=LogLevel.INFO, message="Ready" if message is None else message
         )
 
     def on_change_enabled(self, e: ft.Event[ft.Checkbox]):
+        """Show or hide the node's controls when its enable checkbox toggles.
+
+        Args:
+            e (ft.Event[ft.Checkbox]): Event from the title/enable checkbox.
+        """
         for control in [self.main_view, self.progress, self.alert, self.expand_toggle]:
             control.visible = e.control.value is True
             control.update()
@@ -424,6 +549,15 @@ class NodeUi:
         self.ui.update()
 
     def update_alert(self, log_level: LogLevel, message: str):
+        """Update the node's alert text and border color for a given log level.
+
+        The border color reflects the highest severity seen since the last reset,
+        so that warnings and errors remain visually emphasized.
+
+        Args:
+            log_level (LogLevel): Severity level associated with the alert.
+            message (str): Alert message text to display.
+        """
         self.max_level = max(self.max_level, LogLevel.log_level_to_int(log_level))
         self.alert.value = message
         border_color = level_to_color(
@@ -437,22 +571,51 @@ class NodeUi:
         self.alert.update()
 
     def update_progress(self, step: int, total: int):
+        """Update the node's progress bar based on a step counter.
+
+        Args:
+            step (int): Current step number.
+            total (int): Total number of steps.
+        """
         self.progress.value = step / total
         self.progress.update()
 
     def update_image(self, image: str):
+        """Update the node's main image with a new encoded image source.
+
+        Args:
+            image (str): Base64-encoded image source.
+        """
         self.image.src = image
         self.image.update()
 
     def update_position_plot(self, image: str):
+        """Update the node's position plot with a new encoded image source.
+
+        Args:
+            image (str): Base64-encoded image source.
+        """
         self.position_plot.src = image
         self.position_plot.update()
 
     def update_focus_plot(self, image: str):
+        """Update the node's focus plot with a new encoded image source.
+
+        Args:
+            image (str): Base64-encoded image source.
+        """
         self.focus_plot.src = image
         self.focus_plot.update()
 
     def update_config_data(self, key, value: str):
+        """Append a configuration row to the node's config table.
+
+        Passing a None key clears the entire table.
+
+        Args:
+            key: Configuration parameter name, or None to clear the table.
+            value (str): Configuration value to display for the given key.
+        """
         if key is None:
             self.config.rows = []
         else:
@@ -467,6 +630,14 @@ class NodeUi:
             )
 
     async def transfer_files(self):
+        """Continuously mirror the node's output files to the local folders.
+
+        Connects over SFTP and, in a loop, downloads new images and job-data
+        files from the remote output directory into the received/validated
+        folders, verifying integrity and validating each downloaded file. The
+        loop reacts to the file-transfer status so it can be paused, put on
+        standby, or stopped by the user.
+        """
         ssh = paramiko.SSHClient()
         try:
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -477,10 +648,13 @@ class NodeUi:
                 pkey=paramiko.Ed25519Key.from_private_key_file(pk_file),
             )
             while True:
+                # Wait on the current transfer status before each transfer round.
                 match self.ft_status:
                     case FileTransferStatus.ACTIVE:
                         pass
                     case FileTransferStatus.STANDBY:
+                        # Idle between rounds, then resume unless a status change
+                        # happened while waiting.
                         await asyncio.sleep(10)
                         if self.ft_status == FileTransferStatus.STANDBY:
                             self.ft_status = FileTransferStatus.ACTIVE
@@ -500,6 +674,7 @@ class NodeUi:
                 try:
                     sftp.stat("/home/ender/code/EnderLeaf/output")
                 except FileNotFoundError:
+                    # No remote output folder yet; go idle and check again later.
                     log(
                         level=LogLevel.INFO,
                         message="No image folder on remote.",
@@ -526,12 +701,17 @@ class NodeUi:
                         sftp, "/home/ender/code/EnderLeaf/output"
                     )
                     to_delete_files = []
+                    # Download each new or changed remote file, validate it, and
+                    # queue fully-validated files for remote deletion.
                     for i, src_file in enumerate(src_files):
+                        # Stop early if the transfer was stopped or finished.
                         if self.ft_status in [
                             FileTransferStatus.STOPPED,
                             FileTransferStatus.FINISHED,
                         ]:
                             break
+                        # Pause until the node is free, then abort if a non-active
+                        # status was requested while waiting.
                         if self.ft_status == FileTransferStatus.PAUSED:
                             while self.ft_status == FileTransferStatus.PAUSED:
                                 await asyncio.sleep(10)
@@ -555,6 +735,7 @@ class NodeUi:
                             or received_file.stat().st_size
                             != sftp.stat(str(src_file)).st_size
                         ):
+                            # Download the file and verify its size matches the source.
                             sftp.get(str(src_file), str(received_file))
                             if (
                                 received_file.stat().st_size
@@ -562,11 +743,9 @@ class NodeUi:
                             ):
                                 received_file.unlink()
                                 continue
+                            # Validate the downloaded content by attempting to read it.
                             try:
-                                if received_file.suffix == ".csv":
-                                    read_dataframe(received_file)
-                                elif received_file.suffix == ".png":
-                                    load_image(received_file)
+                                validate_file_content(received_file)
                             except Exception as e:
                                 log(
                                     level=LogLevel.WARNING,
@@ -576,7 +755,8 @@ class NodeUi:
                                 received_file.unlink()
                                 continue
                             else:
-                                received_file.rename(validated_file)
+                                atomic_move(received_file, validated_file)
+                        # A fully validated file can be removed from the remote.
                         if (
                             validated_file.is_file()
                             and validated_file.stat().st_size
@@ -599,18 +779,27 @@ class NodeUi:
 
     @property
     def working(self):
+        """Whether the node's working spinner is currently visible."""
         return self.working_spin.visible is True
 
     @property
     def ui(self):
+        """The root Flet container for this node's panel."""
         return self._ui
 
     @property
     def fullscreen(self):
+        """Whether this node's panel is shown in fullscreen mode."""
         return self._fullscreen
 
     @fullscreen.setter
     def fullscreen(self, value):
+        """Toggle fullscreen mode, hiding the title and expand toggle.
+
+        Args:
+            value (bool): Requested fullscreen state. The change is only applied
+                when it differs from the current state.
+        """
         if value != self._fullscreen:
             self._fullscreen = not self._fullscreen
             self.title.visible = not self._fullscreen
@@ -620,10 +809,20 @@ class NodeUi:
 
     @property
     def ft_status(self):
+        """The current file-transfer status for this node."""
         return self._ft_status
 
     @ft_status.setter
     def ft_status(self, value):
+        """Set the file-transfer status, enforcing allowed transitions.
+
+        Transitions out of the STOPPED or FINISHED states are rejected so that a
+        finished or stopped transfer cannot be resumed. A human-readable message
+        is logged for every accepted transition.
+
+        Args:
+            value (FileTransferStatus): The new file-transfer status.
+        """
         # if (
         #     self._ft_status == FileTransferStatus.PAUSED
         #     and value == FileTransferStatus.ACTIVE
@@ -672,10 +871,17 @@ class NodeUi:
         self.ft_status_text.update()
 
 
+# One NodeUi panel per node, keyed by its WebSocket address.
 node_uis = {k: NodeUi(k, id_color=ID_COLORS[i]) for i, k in enumerate(NODES)}
 
 
 def fullscreen_node() -> NodeUi | None:
+    """Return the NodeUi currently shown in fullscreen mode, if any.
+
+    Returns:
+        NodeUi | None: The fullscreen node UI, or None when no node is
+        fullscreen.
+    """
     for ui in node_uis.values():
         if ui.fullscreen is True:
             return ui
@@ -685,21 +891,39 @@ def fullscreen_node() -> NodeUi | None:
 
 @ft.control
 class EnderButton(ft.Button):
+    """A Flet button pre-configured for the side control panel."""
+
     expand: bool = True
     height: int = BTN_HEIGHT
 
 
 async def job_done(node_address):
+    """Mark a node's task as complete, update its components and signal its completion event.
+
+    Args:
+        node_address (str): WebSocket address of the node whose task finished.
+    """
     node_uis[node_address].working_spin.visible = False
     node_uis[node_address].working_spin.update()
     completion_events[node_address].set()
 
 
 async def listen_for_updates(websocket, node_address):
+    """Consume messages from a node's websocket and update the node UI.
+
+    Each incoming message is decoded into a SocketMessage and dispatched to the
+    matching UI update. On connection loss or error the node's task is marked
+    complete so that awaiting callers can unwind.
+
+    Args:
+        websocket: The connected websocket to read messages from.
+        node_address (str): WebSocket address identifying the owning node UI.
+    """
     try:
         async for message in websocket:
             soccket_message = SocketMessage.load(message)
             node_ui = node_uis[node_address]
+            # Dispatch each message type to the corresponding UI update.
             match soccket_message.type:
                 case MsgType.MESSAGE:
                     node_ui.update_alert(
@@ -719,6 +943,7 @@ async def listen_for_updates(websocket, node_address):
                 case MsgType.POSITION_PLOT:
                     node_ui.update_position_plot(image=soccket_message.image)
                 case MsgType.POSITION_DATA:
+                    # Position data is not visualised on the client.
                     pass
                     # print(soccket_message.x, soccket_message.y, soccket_message.z)
                 case MsgType.FOCUS_PLOT:
@@ -746,6 +971,7 @@ async def listen_for_updates(websocket, node_address):
                         message=soccket_message.message,
                         node_address=node_address,
                     )
+                    # Only treat error-level problems as a completed (failed) task.
                     if soccket_message.level in [LogLevel.ERROR, LogLevel.CRITICAL]:
                         await job_done(node_address=node_address)
                 case _:
@@ -773,6 +999,17 @@ async def listen_for_updates(websocket, node_address):
 
 
 async def execute_on_node(uri, func_name, **kwargs):
+    """Send a command to a single node and await its completion.
+
+    Opens a websocket to the node, starts a listener for UI updates, sends the
+    command, and waits for the node's completion event (with a per-command
+    timeout). Connection and timeout errors are logged and surfaced on the UI.
+
+    Args:
+        uri (str): WebSocket address of the target node.
+        func_name (ControllerCommands): The command to execute on the node.
+        **kwargs: Keyword arguments forwarded to the node command.
+    """
     try:
         async with websockets.connect(
             uri, open_timeout=5, ping_interval=60, ping_timeout=60
@@ -781,6 +1018,7 @@ async def execute_on_node(uri, func_name, **kwargs):
             message = {"func": func_name, "kwargs": kwargs}
             # print(message)
             await websocket.send(json.dumps(message))
+            # Select the completion timeout based on the command being sent.
             match func_name:
                 case ControllerCommands.PING | ControllerCommands.GET_CONFIG:
                     time_out = 5
@@ -815,6 +1053,16 @@ async def execute_on_node(uri, func_name, **kwargs):
 
 
 async def run_task(task_name: ControllerCommands = ControllerCommands.START):
+    """Dispatch a task to the active node(s) and await completion.
+
+    When a node is in fullscreen mode the task runs only on that node;
+    otherwise it runs in parallel across all enabled nodes. Command-specific
+    arguments are assembled before dispatch.
+
+    Args:
+        task_name (ControllerCommands, optional): The command to run. Defaults
+        to ControllerCommands.START.
+    """
     fs_node = fullscreen_node()
     log(
         level=LogLevel.INFO,
@@ -838,10 +1086,12 @@ async def run_task(task_name: ControllerCommands = ControllerCommands.START):
         case ControllerCommands.CENTER_ON_QR_CODE | ControllerCommands.CHECK_CORNERS:
             kwargs["launch_options"] = [LaunchOptons.PRECISE_FOCUS]
     if fs_node is None:
+        # Distributed mode: run the task on every enabled node in parallel.
         for uri in NODES:
             node_ui = node_uis[uri]
             node_ui.reset(f"{task_name} in progress...")
             if task_name == ControllerCommands.IDENTIFY:
+                # Give each node a unique color and a shared display duration. Color is also displayed on the node's LED ring
                 kwargs["color"] = node_ui.id_color
                 kwargs["wait"] = ID_TIME
             if node_ui.title.value is False:
@@ -852,6 +1102,7 @@ async def run_task(task_name: ControllerCommands = ControllerCommands.START):
                 )
             )
     else:
+        # Fullscreen mode: run the task on the single fullscreen node only.
         fs_node.reset(f"{task_name} in progress...")
         tasks.append(
             asyncio.create_task(
@@ -867,12 +1118,21 @@ async def run_task(task_name: ControllerCommands = ControllerCommands.START):
             else f"Task '{task_name}' completed for single node {fs_node.node_address}"
         ),
     )
+    # Reset the completion events so they can be reused for the next run.
     for event in completion_events.values():
         event.clear()
     await set_disable(False, False)
 
 
 async def set_disable(is_disable: bool, is_stop_enabled: bool):
+    """Enable or disable the side-panel controls and some node's components during a running task.
+
+    Args:
+        is_disable (bool): When True, the control buttons are disabled and the
+            nodes' file transfers are paused.
+        is_stop_enabled (bool): Whether the stop button should be enabled (set
+            when a task can be interrupted).
+    """
     for ctrl in [
         bt_connect_printer,
         bt_ping,
@@ -900,9 +1160,11 @@ async def set_disable(is_disable: bool, is_stop_enabled: bool):
     for nu in node_uis.values():
         nu.title.disabled = is_disable
         nu.title.update()
+        # Pause transfers while the node is busy, resume when controls re-enable.
         nu.ft_status = (
             FileTransferStatus.PAUSED if is_disable else FileTransferStatus.ACTIVE
         )
+        # In fullscreen the global spinner is hidden, so show the per-node one.
         if is_fullscreen is False:
             nu.working_spin.visible = is_disable
             nu.working_spin.update()
@@ -911,22 +1173,46 @@ async def set_disable(is_disable: bool, is_stop_enabled: bool):
 
 
 async def on_run_task(e: ft.Event[ft.Button]):
+    """Run the task associated with a clicked side-panel button.
+
+    Args:
+        e (ft.Event[ft.Button]): Click event; the button content names the task.
+    """
     await run_task(e.control.content)
 
 
 def on_capture_array(e):
+    """Placeholder handler for capturing the image array (no-op)."""
     pass
 
 
 async def on_nodes_view_changed(e: ft.Event[ft.Dropdown]):
+    """Switch every node's main view when the view dropdown changes.
+
+    Args:
+        e (ft.Event[ft.Dropdown]): Selection event carrying the new view option.
+    """
     for node_ui in node_uis.values():
         await node_ui.switch_main_view(e.control.value)
 
 
 def get_side_bar_button(command, icon=None, disabled=False):
+    """Build a side-panel button that runs the given command on click.
+
+    Args:
+        command (ControllerCommands): Command executed when the button is
+            clicked.
+        icon (optional): Flet icon shown on the button. Defaults to None.
+        disabled (bool, optional): Initial disabled state. Defaults to False.
+
+    Returns:
+        EnderButton: The configured side-panel button.
+    """
     return EnderButton(content=command, on_click=on_run_task, icon=icon)
 
 
+# MARK: Side panel controls
+# Buttons and dropdowns that make up the left-hand control panel.
 bt_connect_printer = ft.FilledButton(
     content=ControllerCommands.CONNECT_PRINTER,
     on_click=on_run_task,
@@ -982,10 +1268,12 @@ bt_far = get_side_bar_button(
     ControllerCommands.FOCUS_FAR, icon=ft.Icons.FILTER_CENTER_FOCUS_ROUNDED
 )
 
+# Position dropdown used by the MOVE_TO command (positions 1 through 81).
 dd_position = ft.Dropdown(
     options=[ft.DropdownOption(key=i + 1, content=ft.Text(i + 1)) for i in range(81)]
 )
 
+# View dropdown that switches all nodes between image/plot/config views.
 dd_view = ft.Dropdown(
     options=[
         ft.DropdownOption(key=nvo.value, text=nvo.value)
@@ -1001,8 +1289,10 @@ dd_view = ft.Dropdown(
     on_select=on_nodes_view_changed,
 )
 
+# Global "working" spinner shown in the side panel while a task runs.
 spin_working = spins.Wave(color=COLOUR_ACCENT, expand=True, visible=False)
 
+# Collapsible group of secondary controls in the side panel.
 ep_extra_controls = ft.ExpansionTile(
     title=ft.Text("Extra controls"),
     controls_padding=ft.Padding.symmetric(horizontal=10, vertical=10),
@@ -1030,6 +1320,7 @@ ep_extra_controls = ft.ExpansionTile(
 )
 
 if MAIN_NODE is True:
+    # File-transfer feedback panel, only shown on the main (coordinating) node.
     ep_file_transfer = ft.ExpansionTile(
         title=ft.Text("File transfers"),
         controls_padding=ft.Padding.symmetric(horizontal=4, vertical=4),
@@ -1051,6 +1342,7 @@ if MAIN_NODE is True:
         expanded=True,
     )
 
+# Grid of node panels, laid out horizontally with up to two columns.
 gv_nodes = ft.GridView(
     spacing=10,
     scroll=ft.ScrollMode.ALWAYS,
@@ -1061,6 +1353,7 @@ gv_nodes = ft.GridView(
     runs_count=min(len(NODES), 2),
 )
 
+# Ordered list of rows that compose the side control panel.
 sb_controls = [
     ft.Row(spin_working),
     ft.Row(bt_connect_printer),
@@ -1075,6 +1368,7 @@ sb_controls = [
     ft.Text("Acquisition Job", size=16),
     ft.Row([bt_launch, bt_stop]),
 ]
+# The file-transfer panel is only relevant to the main node.
 if MAIN_NODE:
     sb_controls.append(ep_file_transfer)
 
@@ -1087,6 +1381,11 @@ side_buttons = ft.Column(
 
 
 def global_page() -> ft.View:
+    """Build the default page showing all nodes in a grid.
+
+    Returns:
+        ft.View: The root view containing the side panel, node grid, and log.
+    """
     return ft.View(
         route="/",
         controls=[
@@ -1107,6 +1406,14 @@ def global_page() -> ft.View:
 
 
 def fullscren_page(route) -> ft.View:
+    """Build the fullscreen page for a single node.
+
+    Args:
+        route (str): The page route, whose remainder names the node address.
+
+    Returns:
+        ft.View: The view showing the requested node in fullscreen.
+    """
     node_address = route[1:]
     node = node_uis[node_address]
     node.fullscreen = True
@@ -1143,11 +1450,20 @@ def fullscren_page(route) -> ft.View:
 
 
 async def main(page: ft.Page):
+    """Entry point that builds and configures the Flet application.
+
+    Sets up the page window, themes, routing between the global and fullscreen
+    views, and (on the main node) the file-transfer background tasks.
+
+    Args:
+        page (ft.Page): The Flet page instance to configure.
+    """
     page.title = "EnderLeaf"
     page.window.width = 1200
     page.window.height = 900
     page.vertical_alignment = ft.MainAxisAlignment.START
     page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
+    # Disable native page transitions so view switching stays instant.
     page.theme = ft.Theme(
         page_transitions=ft.PageTransitionsTheme(
             android=ft.PageTransitionTheme.NONE,
@@ -1175,15 +1491,19 @@ async def main(page: ft.Page):
     page.update()
 
     async def go_fullscreen(e: ft.Event[ft.IconButton]):
+        # Navigate to the fullscreen route for the node that owns the button.
         # log(level=LogLevel.DEBUG, message=str(e.control.node_address))
         await page.push_route(f"/{e.control.node_address}")
 
+    # Wire each node's expand toggle to open its fullscreen route.
     for nu in node_uis.values():
         nu.expand_toggle.on_click = go_fullscreen
 
     def route_change():
         # log(level=LogLevel.DEBUG, message=f"Route changed -> {page.route}")
         page.views.clear()
+        # Always start from the global view, then layer a fullscreen view on top
+        # when the route names a node, adjusting the theme accent accordingly.
         page.views.append(global_page())
         if len(page.route) > 1:
             page.views.append(fullscren_page(page.route))
@@ -1198,6 +1518,7 @@ async def main(page: ft.Page):
         page.update()
 
     async def view_pop(e):
+        # When a view is popped, remove it and re-route to the new top view.
         if e.view is not None:
             # log(level=LogLevel.DEBUG, message=f"View pop: {e.view}")
             page.views.remove(e.view)
@@ -1210,11 +1531,13 @@ async def main(page: ft.Page):
     chk_show_log.on_change = on_change_log_visibility
 
     if MAIN_NODE is True:
+        # Launch a background file-transfer task for every node on the main node.
         transfer_files_tasks = [
             page.run_task(node.transfer_files) for node in node_uis.values()
         ]
 
         async def on_disconnect(e):
+            # On app shutdown, stop all transfers and wait for them to finish.
             print("Entering disconnect")
             for nu in node_uis.values():
                 nu.ft_status = FileTransferStatus.STOPPED
