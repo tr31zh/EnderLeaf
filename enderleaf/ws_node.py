@@ -105,7 +105,7 @@ async def node_get_config(websocket, **kwargs):
     )
     await websocket.send(
         result_message(
-            result=await controller.send_config(),
+            result=await controller.socket_send_config(),
             ok_message="Config sent",
             nok_message="Failed to send config",
         ).dump()
@@ -281,7 +281,7 @@ async def node_center_on_qr_code(websocket, **kwargs):
     await websocket.send(
         SocketMessage(
             type=MsgType.MESSAGE,
-            message="Centering o,n QR code. No other operation is allowed",
+            message="Centering on QR code. No other operation is allowed",
         ).dump()
     )
     launch_options = kwargs.get("launch_options", [])
@@ -324,9 +324,19 @@ async def node_toggle_lights(websocket, **kwargs):
         **kwargs: Unused arguments
     """
     controller.socket = websocket
-    await controller.shutter(controller.top_lights.mean == 0)
+    new_state = controller.top_lights.mean == 0
     await websocket.send(
-        SocketMessage(type=MsgType.RESULT, message="Lights togled").dump()
+        SocketMessage(
+            type=MsgType.MESSAGE,
+            message="Toggling lights. No other operation is allowed",
+        ).dump()
+    )
+    await websocket.send(
+        result_message(
+            result=await controller.socket_toggle_lights(state=new_state),
+            ok_message="Lights toggle OK",
+            nok_message="Lights toggle failed",
+        ).dump()
     )
 
 
@@ -338,9 +348,18 @@ async def node_cycle_lights(websocket, **kwargs):
         **kwargs: Unused arguments
     """
     controller.socket = websocket
-    await controller.cycle_lights()
     await websocket.send(
-        SocketMessage(type=MsgType.RESULT, message="Lights cycled").dump()
+        SocketMessage(
+            type=MsgType.MESSAGE,
+            message="Cycling lights. No other operation is allowed",
+        ).dump()
+    )
+    await websocket.send(
+        result_message(
+            result=await controller.socket_cycle_lights(),
+            ok_message="Cycle lights OK",
+            nok_message="Cycle lights failed",
+        ).dump()
     )
 
 

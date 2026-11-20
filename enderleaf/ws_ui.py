@@ -14,9 +14,8 @@ from dataclasses import dataclass
 import json
 import socket
 import paramiko
-import signal
+import platform
 import traceback
-import shutil
 
 import numpy as np
 from PIL import Image
@@ -46,15 +45,13 @@ from enderleaf.enums import (
     FileTransferStatus,
 )
 from enderleaf.socket_message import SocketMessage
-from enderleaf.image import encode_image, load_image
 from enderleaf.tools import (
     build_color_steps,
     ensure_folder,
     list_remote_files,
     list_remote_folders,
-    read_dataframe,
     atomic_move,
-    validate_file_content
+    validate_file_content,
 )
 
 # MARK: Node configuration
@@ -79,14 +76,14 @@ if LOCAL_CLIENTS is True or not addresses:
     NUM_NODES = 4
     PORTS = [i + 8760 for i in range(NUM_NODES)]
     NODES = [f"ws://localhost:{p}" for p in PORTS]
-    MAIN_NODE = True
 else:
     # Distributed mode: resolve the host's own IP address and compare it with the
     # configured main node IP to decide whether this client is the main node.
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.connect(("1.2.3.4", 1))
-    MAIN_NODE = s.getsockname()[0] == addresses.get("main", "")
     NODES = [f"ws://{ip}:8765" for ip in addresses["nodes"]]
+
+MAIN_NODE = platform.system().lower() == "darwin"
 
 # MARK: UI configuration constants
 # Per-node identity colors, identify timing, and shared visual styling values.
@@ -99,6 +96,8 @@ COLOUR_ACCENT = ft.Colors.GREEN_100
 FULLSCREEN_COLOUR_ACCENT = ft.Colors.BLUE_100
 COLOUR_BACKGROUND = ft.Colors.SURFACE_CONTAINER_HIGH
 COLOUR_DETAIL = ft.Colors.GREY_600
+
+TRANSFER_WAIT_DELAY = 10
 
 # One completion event per node, used to synchronise task execution across the
 # distributed nodes. Cleared after every run_task call.
@@ -190,7 +189,7 @@ def log(level, message: str, node_address: str | None = None):
 
     The message is logged through the configured logger at the given level and,
     is additionally appended to the live
-    log view, for warning-level-and-above entries. 
+    log view, for warning-level-and-above entries.
     If such an entry appears while the log view is hidden, the view
     and its toggle checkbox are revealed automatically.
 
@@ -250,6 +249,7 @@ def log(level, message: str, node_address: str | None = None):
     log_view.update()
 
 
+ensure_folder(ROOT_FOLDER.joinpath("logs"))
 log_file_handler = logging.FileHandler(
     ROOT_FOLDER.joinpath(
         "logs", f"enderleaf_{dt.now().strftime('%Y_%m_%d_%H%M%S')}.log"
@@ -428,12 +428,14 @@ class NodeUi:
             ],
             rows=[],
         )
-        self._ft_status = FileTransferStatus.ACTIVE
-        self.ft_status_text = ft.Text("Starting node...")
+
+        self._ft_status = FileTransferStatus.PAUSED
+        self.ft_status_text = ft.Text(self._ft_status.value)
         self.ft_progress_txt = ft.Text("Transfer progress", width=200)
         self.ft_progress = ft.ProgressBar(
             value=0, bar_height=10, expand=True, height=12
         )
+
         # Column shown in the main node's "File transfers" panel for this node.
         self.ft_feedback = ft.Column(
             controls=[
@@ -451,18 +453,23 @@ class NodeUi:
                 ft.Tab(label=NodeViewOption.IMAGE.value),
                 ft.Tab(label=NodeViewOption.PLOT_POSITION.value),
                 ft.Tab(label=NodeViewOption.PLOT_FOCUS.value),
-                ft.Tab(label=NodeViewOption.CONFIG.value),
+                # ft.Tab(label=NodeViewOption.CONFIG.value),
             ],
             # visible=False,
             scrollable=False,
         )
         self.tab_bar_view = ft.TabBarView(
             expand=True,
-            controls=[self.image, self.position_plot, self.focus_plot, self.config],
+            controls=[
+                self.image,
+                self.position_plot,
+                self.focus_plot,
+                # self.config,
+            ],
         )
         self.main_view = ft.Tabs(
             selected_index=0,
-            length=4,
+            length=len(self.tab_bar.tabs),
             expand=True,
             content=ft.Column(expand=True, controls=[self.tab_bar, self.tab_bar_view]),
         )
@@ -516,8 +523,8 @@ class NodeUi:
                 await self.main_view.move_to(1)
             case NodeViewOption.PLOT_FOCUS:
                 await self.main_view.move_to(2)
-            case NodeViewOption.CONFIG:
-                await self.main_view.move_to(3)
+            # case NodeViewOption.CONFIG:
+            #     await self.main_view.move_to(3)
             case _:
                 raise NotImplementedError(f"Unknown node view mode: {new_view.value}")
         self.main_view.update()
@@ -629,153 +636,222 @@ class NodeUi:
                 )
             )
 
-    async def transfer_files(self):
-        """Continuously mirror the node's output files to the local folders.
+    def handle_file(
+        self, sftp: paramiko.sftp_client.SFTPClient, src_file: Path
+    ) -> bool:
+        """Download and validate a single remote file, staging it locally.
 
-        Connects over SFTP and, in a loop, downloads new images and job-data
-        files from the remote output directory into the received/validated
-        folders, verifying integrity and validating each downloaded file. The
-        loop reacts to the file-transfer status so it can be paused, put on
-        standby, or stopped by the user.
+        The remote file is mirrored into two local destinations: a "received"
+        copy (the raw download target) and a "validated" copy (the trusted
+        result). A download is skipped when a matching validated file already
+        exists. After downloading, the file's size is checked against the remote
+        and its content is validated; on any failure the received copy is
+        removed and the method returns False. A successfully validated file is
+        atomically moved into the validated folder.
+
+        Args:
+            sftp (paramiko.sftp_client.SFTPClient): An open SFTP session used to
+                fetch the file and query its remote size.
+            src_file (Path): Absolute path of the remote source file, whose
+                tail after the "output" segment names the local mirror path.
+
+        Returns:
+            bool: True when the file is present and validated (already or newly),
+                False when the download or validation failed.
+        """
+        # Derive the local mirror paths from the tail of the remote path that
+        # follows the shared "output" segment, for the received and validated
+        # copies respectively.
+        received_file = PT_IMAGES_RECEIVED.joinpath(
+            *src_file.parts[src_file.parts.index("output") + 1 :]
+        )
+        validated_file = PT_IMAGES_VALIDATED.joinpath(
+            *src_file.parts[src_file.parts.index("output") + 1 :]
+        )
+        # Only download when no validated copy exists and the received copy is
+        # either missing or out of date (different size from the remote).
+        if not validated_file.is_file() and (
+            not received_file.is_file()
+            or received_file.stat().st_size != sftp.stat(str(src_file)).st_size
+        ):
+            # Download the file and verify its size matches the source.
+            sftp.get(str(src_file), str(received_file))
+            # A size mismatch means a truncated or corrupted download; discard it.
+            if received_file.stat().st_size != sftp.stat(str(src_file)).st_size:
+                received_file.unlink()
+                return False
+            # Validate the downloaded content by attempting to read it.
+            try:
+                validate_file_content(received_file)
+            except Exception as e:
+                log(
+                    level=LogLevel.WARNING,
+                    message=f"Received corrupted file '{str(received_file)}' wieth error '{str(e)}'",
+                    node_address=self.ip,
+                )
+                received_file.unlink()
+                return False
+            else:
+                # Content is valid: promote the received copy to the validated folder.
+                atomic_move(received_file, validated_file)
+        # A fully validated file can be removed from the remote.
+        if (
+            validated_file.is_file()
+            and validated_file.stat().st_size == sftp.stat(str(src_file)).st_size
+        ):
+            sftp.remove(str(src_file))
+        return True
+
+    def create_local_folders(self, sftp: paramiko.sftp_client.SFTPClient):
+        """Mirror the remote output folder tree into the local received/validated dirs.
+
+        Every subfolder listed under the remote output directory is recreated
+        locally under both the received and validated roots so that downloaded
+        files have their target directories in place before transfer.
+
+        Args:
+            sftp (paramiko.sftp_client.SFTPClient): An open SFTP session used to
+                list the remote output subfolders.
+        """
+        # For each remote subfolder, create the matching received and validated
+        # local folders.
+        for src_fld in list_remote_folders(sftp, "/home/ender/code/EnderLeaf/output"):
+            ensure_folder(
+                PT_IMAGES_RECEIVED.joinpath(
+                    *src_fld.parts[src_fld.parts.index("output") + 1 :]
+                )
+            )
+            ensure_folder(
+                PT_IMAGES_VALIDATED.joinpath(
+                    *src_fld.parts[src_fld.parts.index("output") + 1 :]
+                )
+            )
+
+    async def transfer_loop(self) -> bool:
+        """Run one SSH/SFTP transfer round for this node's remote output.
+
+        Opens an SSH/SFTP connection, ensures the local folder tree mirrors the
+        remote output directory, and downloads every new or changed remote file
+        through :meth:`handle_file`, updating the progress UI as it goes. The
+        loop respects the transfer status: it stops when the transfer is
+        stopped or finished, and yields when paused. On completion the status is
+        moved back to STANDBY so the parent loop can idle before the next round.
+
+        Returns:
+            bool: True when the round completed cleanly (including the "no
+                remote folder" case, which simply idles to STANDBY), False when
+                an SSH or SFTP error occurred.
         """
         ssh = paramiko.SSHClient()
         try:
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            pk_file = Path.home().joinpath(".ssh/id_ed25519")
             ssh.connect(
                 self.ip,
                 username="ender",
-                pkey=paramiko.Ed25519Key.from_private_key_file(pk_file),
+                pkey=paramiko.Ed25519Key.from_private_key_file(
+                    Path.home().joinpath(".ssh/id_ed25519")
+                ),
             )
-            while True:
-                # Wait on the current transfer status before each transfer round.
-                match self.ft_status:
-                    case FileTransferStatus.ACTIVE:
-                        pass
-                    case FileTransferStatus.STANDBY:
-                        # Idle between rounds, then resume unless a status change
-                        # happened while waiting.
-                        await asyncio.sleep(10)
-                        if self.ft_status == FileTransferStatus.STANDBY:
-                            self.ft_status = FileTransferStatus.ACTIVE
-                        else:
-                            continue
-                    case FileTransferStatus.PAUSED:
-                        await asyncio.sleep(10)
-                        continue
-                    case FileTransferStatus.STOPPED | FileTransferStatus.FINISHED:
-                        await asyncio.sleep(0)
+            sftp = ssh.open_sftp()
+            try:
+                sftp.stat("/home/ender/code/EnderLeaf/output")
+            except FileNotFoundError:
+                # No remote output folder yet; go idle and check again later.
+                log(
+                    level=LogLevel.INFO,
+                    message="No image folder on remote.",
+                    node_address=self.ip,
+                )
+                if self.ft_status == FileTransferStatus.ACTIVE:
+                    self.ft_status = FileTransferStatus.STANDBY
+                return True
+            try:
+                self.create_local_folders(sftp=sftp)
+                src_files = list_remote_files(sftp, "/home/ender/code/EnderLeaf/output")
+                # Download each new or changed remote file, validate it, and
+                # queue fully-validated files for remote deletion.
+                for i, src_file in enumerate(src_files):
+                    await asyncio.sleep(0)
+                    # Stop early if the transfer was stopped or finished.
+                    if self.ft_status in [
+                        FileTransferStatus.STOPPED,
+                        FileTransferStatus.FINISHED,
+                    ]:
                         break
-                    case _:
-                        raise NotADirectoryError(
-                            f"Unknwon file transfer status: '{self.ft_status}"
-                        )
-                sftp = ssh.open_sftp()
-                try:
-                    sftp.stat("/home/ender/code/EnderLeaf/output")
-                except FileNotFoundError:
-                    # No remote output folder yet; go idle and check again later.
-                    log(
-                        level=LogLevel.INFO,
-                        message="No image folder on remote.",
-                        node_address=self.ip,
-                    )
-                    if self.ft_status == FileTransferStatus.ACTIVE:
-                        self.ft_status = FileTransferStatus.STANDBY
-                    continue
-                try:
-                    for src_fld in list_remote_folders(
-                        sftp, "/home/ender/code/EnderLeaf/output"
-                    ):
-                        ensure_folder(
-                            PT_IMAGES_RECEIVED.joinpath(
-                                *src_fld.parts[src_fld.parts.index("output") + 1 :]
-                            )
-                        )
-                        ensure_folder(
-                            PT_IMAGES_VALIDATED.joinpath(
-                                *src_fld.parts[src_fld.parts.index("output") + 1 :]
-                            )
-                        )
-                    src_files = list_remote_files(
-                        sftp, "/home/ender/code/EnderLeaf/output"
-                    )
-                    to_delete_files = []
-                    # Download each new or changed remote file, validate it, and
-                    # queue fully-validated files for remote deletion.
-                    for i, src_file in enumerate(src_files):
-                        # Stop early if the transfer was stopped or finished.
-                        if self.ft_status in [
-                            FileTransferStatus.STOPPED,
-                            FileTransferStatus.FINISHED,
-                        ]:
+                    # Pause until the node is free, then abort if a non-active
+                    # status was requested while waiting.
+                    if self.ft_status == FileTransferStatus.PAUSED:
+                        while self.ft_status == FileTransferStatus.PAUSED:
+                            await asyncio.sleep(10)
+                        if self.ft_status != FileTransferStatus.ACTIVE:
                             break
-                        # Pause until the node is free, then abort if a non-active
-                        # status was requested while waiting.
-                        if self.ft_status == FileTransferStatus.PAUSED:
-                            while self.ft_status == FileTransferStatus.PAUSED:
-                                await asyncio.sleep(10)
-                            if self.ft_status != FileTransferStatus.ACTIVE:
-                                break
-                        self.ft_progress.value = (i + 1) / len(src_files)
-                        self.ft_progress.update()
-                        self.ft_progress_txt.value = (
-                            f"Transfer progress ({i+1}/{len(src_files)})"
-                        )
-                        self.ft_progress_txt.update()
-                        await asyncio.sleep(0)
-                        received_file = PT_IMAGES_RECEIVED.joinpath(
-                            *src_file.parts[src_file.parts.index("output") + 1 :]
-                        )
-                        validated_file = PT_IMAGES_VALIDATED.joinpath(
-                            *src_file.parts[src_file.parts.index("output") + 1 :]
-                        )
-                        if not validated_file.is_file() and (
-                            not received_file.is_file()
-                            or received_file.stat().st_size
-                            != sftp.stat(str(src_file)).st_size
-                        ):
-                            # Download the file and verify its size matches the source.
-                            sftp.get(str(src_file), str(received_file))
-                            if (
-                                received_file.stat().st_size
-                                != sftp.stat(str(src_file)).st_size
-                            ):
-                                received_file.unlink()
-                                continue
-                            # Validate the downloaded content by attempting to read it.
-                            try:
-                                validate_file_content(received_file)
-                            except Exception as e:
-                                log(
-                                    level=LogLevel.WARNING,
-                                    message=f"Received corrupted file '{str(received_file)}' wieth error '{str(e)}'",
-                                    node_address=self.ip,
-                                )
-                                received_file.unlink()
-                                continue
-                            else:
-                                atomic_move(received_file, validated_file)
-                        # A fully validated file can be removed from the remote.
-                        if (
-                            validated_file.is_file()
-                            and validated_file.stat().st_size
-                            == sftp.stat(str(src_file)).st_size
-                        ):
-                            to_delete_files.append(src_file)
-                    for d_file in to_delete_files:
-                        sftp.remove(str(d_file))
-                except Exception as e:
-                    log(level=LogLevel.ERROR, message=f"SFTP exception: {str(e)}")
-                finally:
-                    if self.ft_status == FileTransferStatus.ACTIVE:
-                        self.ft_status = FileTransferStatus.STANDBY
-                    sftp.close()
+                    self.handle_file(sftp=sftp, src_file=src_file)
+                    self.ft_progress.value = (i + 1) / len(src_files)
+                    self.ft_progress.update()
+                    self.ft_progress_txt.value = (
+                        f"Transfer progress ({i+1}/{len(src_files)})"
+                    )
+                    self.ft_progress_txt.update()
+            except Exception as e:
+                log(level=LogLevel.ERROR, message=f"SFTP exception: {str(e)}")
+                return False
+            finally:
+                # An active round that finishes with no errors idles to STANDBY
+                # so the parent loop waits before retrying.
+                if self.ft_status == FileTransferStatus.ACTIVE:
+                    self.ft_status = FileTransferStatus.STANDBY
+                sftp.close()
         except Exception as e:
             log(level=LogLevel.ERROR, message=f"SSH exception: {str(e)}")
+            return False
         finally:
             ssh.close()
-            self.ft_status = FileTransferStatus.FINISHED
+
+    async def transfer_files(self):
+        """Drive the node's file-transfer task loop for its whole lifetime.
+
+        Repeatedly dispatches transfer rounds while honoring the transfer status
+        machine: ACTIVE runs a round, STANDBY idles then resumes, PAUSED waits,
+        and STOPPED/FINISHED terminate the loop. This task is launched once per
+        node on the main node and runs until the transfer is finished.
+        """
+        while True:
+            # Wait on the current transfer status before each transfer round.
+            match self.ft_status:
+                case FileTransferStatus.ACTIVE:
+                    pass
+                case FileTransferStatus.STANDBY:
+                    # Idle between rounds, then resume unless a status change
+                    # happened while waiting.
+                    await asyncio.sleep(TRANSFER_WAIT_DELAY)
+                    if self.ft_status == FileTransferStatus.STANDBY:
+                        self.ft_status = FileTransferStatus.ACTIVE
+                    else:
+                        continue
+                case FileTransferStatus.PAUSED:
+                    # Node is busy: wait out the delay and retry without running a round.
+                    await asyncio.sleep(TRANSFER_WAIT_DELAY)
+                    continue
+                case FileTransferStatus.STOPPED:
+                    # A stop was requested: move to FINISHED and end the loop.
+                    self.ft_status = FileTransferStatus.FINISHED
+                    await asyncio.sleep(0)
+                    break
+                case FileTransferStatus.FINISHED:
+                    # Already finished: yield and end the loop.
+                    await asyncio.sleep(0)
+                    break
+                case _:
+                    raise NotADirectoryError(
+                        f"Unknwon file transfer status: '{self.ft_status}"
+                    )
+            # Run the transfer round for the ACTIVE/STANDBY-resumed cases.
+            await self.transfer_loop()
+        log(
+            level=LogLevel.INFO,
+            message="Ended file transfer task",
+            node_address=self.ip,
+        )
 
     @property
     def working(self):
@@ -932,7 +1008,7 @@ async def listen_for_updates(websocket, node_address):
                     log(
                         level=LogLevel.INFO,
                         message=soccket_message.message,
-                        node_address=node_address,
+                        node_address=node_ui.ip,
                     )
                 case MsgType.PROGRESS:
                     node_ui.update_progress(
@@ -959,7 +1035,7 @@ async def listen_for_updates(websocket, node_address):
                     log(
                         level=soccket_message.level,
                         message=soccket_message.message,
-                        node_address=node_address,
+                        node_address=node_ui.ip,
                     )
                     await job_done(node_address=node_address)
                 case MsgType.PROBLEM:
@@ -969,7 +1045,7 @@ async def listen_for_updates(websocket, node_address):
                     log(
                         level=soccket_message.level,
                         message=soccket_message.message,
-                        node_address=node_address,
+                        node_address=node_ui.ip,
                     )
                     # Only treat error-level problems as a completed (failed) task.
                     if soccket_message.level in [LogLevel.ERROR, LogLevel.CRITICAL]:
@@ -978,7 +1054,7 @@ async def listen_for_updates(websocket, node_address):
                     log(
                         level=LogLevel.CRITICAL,
                         message=f"Unknown message type '{str(soccket_message.type)}'",
-                        node_address=node_address,
+                        node_address=node_ui.ip,
                     )
                     node_ui.update_alert(
                         log_level=soccket_message.level,
@@ -1122,6 +1198,9 @@ async def run_task(task_name: ControllerCommands = ControllerCommands.START):
     for event in completion_events.values():
         event.clear()
     await set_disable(False, False)
+    if run_task == ControllerCommands.START:
+        for nu in node_uis.values():
+            nu.ft_status = FileTransferStatus.ACTIVE
 
 
 async def set_disable(is_disable: bool, is_stop_enabled: bool):
@@ -1196,7 +1275,7 @@ async def on_nodes_view_changed(e: ft.Event[ft.Dropdown]):
         await node_ui.switch_main_view(e.control.value)
 
 
-def get_side_bar_button(command, icon=None, disabled=False):
+def get_side_bar_button(command, icon=None, disabled=False, visible: bool = True):
     """Build a side-panel button that runs the given command on click.
 
     Args:
@@ -1208,7 +1287,9 @@ def get_side_bar_button(command, icon=None, disabled=False):
     Returns:
         EnderButton: The configured side-panel button.
     """
-    return EnderButton(content=command, on_click=on_run_task, icon=icon)
+    return EnderButton(
+        content=command, on_click=on_run_task, icon=icon, visible=visible
+    )
 
 
 # MARK: Side panel controls
@@ -1226,9 +1307,6 @@ bt_ping = get_side_bar_button(
 bt_identify = get_side_bar_button(
     command=ControllerCommands.IDENTIFY, icon=ft.Icons.QUESTION_MARK
 )
-bt_get_config = get_side_bar_button(
-    ControllerCommands.GET_CONFIG, icon=ft.Icons.SETTINGS_ROUNDED
-)
 bt_home = get_side_bar_button(ControllerCommands.GO_HOME, icon=ft.Icons.HOME)
 bt_idle = get_side_bar_button(
     ControllerCommands.GO_IDLE,
@@ -1245,6 +1323,8 @@ bt_launch = ft.FilledButton(
 bt_stop = get_side_bar_button(
     ControllerCommands.STOP, icon=ft.Icons.STOP, disabled=True
 )
+
+# MARK:  Extra controls
 bt_move_to = get_side_bar_button(
     ControllerCommands.MOVE_TO, icon=ft.Icons.ARROW_CIRCLE_RIGHT_OUTLINED
 )
@@ -1255,17 +1335,26 @@ bt_check_corners = get_side_bar_button(
     command=ControllerCommands.CHECK_CORNERS, icon=ft.Icons.ALL_OUT
 )
 bt_toggle_lights = get_side_bar_button(
-    command=ControllerCommands.TOGGLE_LIGHTS, icon=ft.Icons.LIGHT_MODE
+    command=ControllerCommands.TOGGLE_LIGHTS, icon=ft.Icons.LIGHT_MODE, visible=False
 )
 bt_cycle_lights = get_side_bar_button(
-    command=ControllerCommands.CYCLE_LIGHTS, icon=ft.Icons.AUTORENEW
+    command=ControllerCommands.CYCLE_LIGHTS, icon=ft.Icons.AUTORENEW, visible=False
 )
 bt_close = get_side_bar_button(
-    ControllerCommands.FOCUS_CLOSE, icon=ft.Icons.CENTER_FOCUS_STRONG_ROUNDED
+    ControllerCommands.FOCUS_CLOSE,
+    icon=ft.Icons.CENTER_FOCUS_STRONG_ROUNDED,
+    visible=False,
 )
-bt_auto = get_side_bar_button(ControllerCommands.FOCUS_AUTO, icon=ft.Icons.AUTO_AWESOME)
+bt_auto = get_side_bar_button(
+    ControllerCommands.FOCUS_AUTO, icon=ft.Icons.AUTO_AWESOME, visible=False
+)
 bt_far = get_side_bar_button(
-    ControllerCommands.FOCUS_FAR, icon=ft.Icons.FILTER_CENTER_FOCUS_ROUNDED
+    ControllerCommands.FOCUS_FAR,
+    icon=ft.Icons.FILTER_CENTER_FOCUS_ROUNDED,
+    visible=False,
+)
+bt_get_config = get_side_bar_button(
+    ControllerCommands.GET_CONFIG, icon=ft.Icons.SETTINGS_ROUNDED, visible=False
 )
 
 # Position dropdown used by the MOVE_TO command (positions 1 through 81).
@@ -1281,7 +1370,7 @@ dd_view = ft.Dropdown(
             NodeViewOption.IMAGE,
             NodeViewOption.PLOT_POSITION,
             NodeViewOption.PLOT_FOCUS,
-            NodeViewOption.CONFIG,
+            # NodeViewOption.CONFIG,
         ]
     ],
     expand=True,
@@ -1319,28 +1408,24 @@ ep_extra_controls = ft.ExpansionTile(
     ),
 )
 
-if MAIN_NODE is True:
-    # File-transfer feedback panel, only shown on the main (coordinating) node.
-    ep_file_transfer = ft.ExpansionTile(
-        title=ft.Text("File transfers"),
-        controls_padding=ft.Padding.symmetric(horizontal=4, vertical=4),
-        # affinity=ft.TileAffinity.PLATFORM,
-        # maintain_state=False,
-        shape=ft.RoundedRectangleBorder(
-            side=ft.BorderSide(width=1), radius=BORDER_RADIUS
-        ),
-        collapsed_shape=ft.RoundedRectangleBorder(
-            side=ft.BorderSide(width=1), radius=BORDER_RADIUS
-        ),
-        controls=ft.Column(
-            controls=[
-                ft.Row(node.ft_feedback, expand=True) for node in node_uis.values()
-            ],
-            expand=True,
-            intrinsic_width=True,
-        ),
-        expanded=True,
-    )
+# File-transfer feedback panel, only shown on the main (coordinating) node.
+ep_file_transfer = ft.ExpansionTile(
+    title=ft.Text("File transfers"),
+    controls_padding=ft.Padding.symmetric(horizontal=4, vertical=4),
+    # affinity=ft.TileAffinity.PLATFORM,
+    # maintain_state=False,
+    shape=ft.RoundedRectangleBorder(side=ft.BorderSide(width=1), radius=BORDER_RADIUS),
+    collapsed_shape=ft.RoundedRectangleBorder(
+        side=ft.BorderSide(width=1), radius=BORDER_RADIUS
+    ),
+    controls=ft.Column(
+        controls=[ft.Row(node.ft_feedback, expand=True) for node in node_uis.values()],
+        expand=True,
+        intrinsic_width=True,
+    ),
+    expanded=True,
+    visible=MAIN_NODE,
+)
 
 # Grid of node panels, laid out horizontally with up to two columns.
 gv_nodes = ft.GridView(
@@ -1353,28 +1438,23 @@ gv_nodes = ft.GridView(
     runs_count=min(len(NODES), 2),
 )
 
-# Ordered list of rows that compose the side control panel.
-sb_controls = [
-    ft.Row(spin_working),
-    ft.Row(bt_connect_printer),
-    ft.Row(bt_ping),
-    ft.Row(bt_identify),
-    ft.Row(bt_home),
-    ft.Row(bt_idle),
-    ft.Row(bt_park),
-    ft.Row(controls=[ft.Text("View: "), dd_view]),
-    ft.Row(controls=[chk_show_log]),
-    ep_extra_controls,
-    ft.Text("Acquisition Job", size=16),
-    ft.Row([bt_launch, bt_stop]),
-]
-# The file-transfer panel is only relevant to the main node.
-if MAIN_NODE:
-    sb_controls.append(ep_file_transfer)
-
 side_buttons = ft.Column(
     intrinsic_width=True,
-    controls=sb_controls,
+    controls=[
+        ft.Row(spin_working),
+        ft.Row(bt_connect_printer),
+        ft.Row(bt_ping),
+        ft.Row(bt_identify),
+        ft.Row(bt_home),
+        ft.Row(bt_idle),
+        ft.Row(bt_park),
+        ft.Row(controls=[ft.Text("View: "), dd_view]),
+        ft.Row(controls=[chk_show_log]),
+        ep_extra_controls,
+        ft.Text("Acquisition Job", size=16),
+        ft.Row([bt_launch, bt_stop]),
+        ep_file_transfer,
+    ],
     auto_scroll=True,
     scroll=ft.ScrollMode.ADAPTIVE,
 )
@@ -1449,6 +1529,34 @@ def fullscren_page(route) -> ft.View:
     )
 
 
+def confirm_exit_dialog(dialog_text: str, actions: list):
+    return ft.AlertDialog(
+        modal=False,
+        title=ft.Text("Please confirm"),
+        content=ft.Text(dialog_text),
+        actions=actions,
+        actions_alignment=ft.MainAxisAlignment.END,
+    )
+
+
+async def stop_for_transfer_tasks():
+    for nu in node_uis.values():
+        nu.ft_status = FileTransferStatus.STOPPED
+    while True:
+        waiting_count = 0
+        for nu in node_uis.values():
+            if nu.ft_status != FileTransferStatus.FINISHED:
+                waiting_count += 1
+        await asyncio.sleep(2)
+        if waiting_count == 0:
+            break
+        print(f"Waiting for {waiting_count} nodes to finish pending transfers")
+        log(
+            level=LogLevel.INFO,
+            message=f"Waiting for {waiting_count} nodes to finish pending transfers",
+        )
+
+
 async def main(page: ft.Page):
     """Entry point that builds and configures the Flet application.
 
@@ -1486,8 +1594,9 @@ async def main(page: ft.Page):
     )
     # page.theme_mode = ft.ThemeMode.LIGHT
     page.update()
-    # if page.web is False:
-    #     await page.window.center()
+    desktop_client = page.web is False
+    if desktop_client:
+        page.window.full_screen = True
     page.update()
 
     async def go_fullscreen(e: ft.Event[ft.IconButton]):
@@ -1535,30 +1644,83 @@ async def main(page: ft.Page):
         transfer_files_tasks = [
             page.run_task(node.transfer_files) for node in node_uis.values()
         ]
+        if desktop_client is True:
 
-        async def on_disconnect(e):
-            # On app shutdown, stop all transfers and wait for them to finish.
-            print("Entering disconnect")
-            for nu in node_uis.values():
-                nu.ft_status = FileTransferStatus.STOPPED
-            while True:
-                waiting_count = 0
+            async def handle_confirm_close_click(e: ft.Event[ft.Button]):
+                await stop_for_transfer_tasks()
+                await page.window.destroy()
+
+            def handle_no_wip_click(e: ft.Event[ft.OutlinedButton]):
+                page.pop_dialog()
+
+            def handle_no_tip_click(e: ft.Event[ft.OutlinedButton]):
                 for nu in node_uis.values():
-                    if nu.ft_status != FileTransferStatus.FINISHED:
-                        waiting_count += 1
-                await asyncio.sleep(2)
-                if waiting_count == 0:
-                    break
-                print(f"Waiting for {waiting_count} nodes to finish pending transfers")
-                log(
-                    level=LogLevel.INFO,
-                    message=f"Waiting for {waiting_count} nodes to finish pending transfers",
-                )
-            print("exiting disconnect")
+                    nu.ft_status = FileTransferStatus.ACTIVE
+                page.pop_dialog()
 
-        page.on_disconnect = on_disconnect
+            async def window_event(e: ft.WindowEvent):
+                if e.type == ft.WindowEventType.CLOSE:
+                    # Check if job in progress
+                    if spin_working.visible:
+                        page.show_dialog(
+                            confirm_exit_dialog(
+                                dialog_text="Work in progress, are you sure you want to close the program?",
+                                actions=[
+                                    ft.Button(
+                                        content="Yes",
+                                        on_click=handle_confirm_close_click,
+                                    ),
+                                    ft.OutlinedButton(
+                                        content="No", on_click=handle_no_wip_click
+                                    ),
+                                ],
+                            )
+                        )
+                    else:
+                        transfer_in_progress = False
+                        for nu in node_uis.values():
+                            if nu.ft_status == FileTransferStatus.ACTIVE:
+                                transfer_in_progress = True
+                            nu.ft_status = FileTransferStatus.PAUSED
+                        await asyncio.sleep(0.1)
+                        if transfer_in_progress:
+                            page.show_dialog(
+                                confirm_exit_dialog(
+                                    dialog_text="File transfer in progress, are you sure you want to close the program?",
+                                    actions=[
+                                        ft.Button(
+                                            content="Yes",
+                                            on_click=handle_confirm_close_click,
+                                        ),
+                                        ft.OutlinedButton(
+                                            content="No", on_click=handle_no_tip_click
+                                        ),
+                                    ],
+                                )
+                            )
+                        else:
+                            await page.window.destroy()
+                    page.update()
+
+            page.window.prevent_close = True
+            page.window.on_event = window_event
+
+        else:
+
+            async def on_disconnect(e):
+                # On app shutdown, stop all transfers and wait for them to finish.
+                print("Entering disconnect")
+                await stop_for_transfer_tasks()
+                print("exiting disconnect")
+
+            page.on_disconnect = on_disconnect
 
     route_change()
+
+    page.update()
+    for nu in node_uis.values():
+        nu.ft_status = FileTransferStatus.ACTIVE
+    await asyncio.sleep(0.1)
 
     log(LogLevel.INFO, "Started")
 

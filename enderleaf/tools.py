@@ -5,6 +5,7 @@ from datetime import datetime as dt
 import psutil
 import math
 import stat
+from collections import defaultdict
 
 import paramiko
 
@@ -142,6 +143,12 @@ def list_remote_files(sftp: paramiko.sftp_client.SFTPClient, path: str):
             )
         else:
             pass
+    return result
+
+def split_file_list(files:list[Path])->defaultdict:
+    result = defaultdict(list)
+    for file in files:
+        result[file.suffix].append(file)
     return result
 
 

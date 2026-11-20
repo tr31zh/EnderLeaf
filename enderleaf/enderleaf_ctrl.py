@@ -115,12 +115,13 @@ def maybe_method(method):
     Returns:
         callable: The wrapped method
     """
+
     @wraps(method)
     async def _impl(self, *method_args, **method_kwargs):
         try:
             method_output = await method(self, *method_args, **method_kwargs)
         except Exception as e:
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.EXCEPTION,
                 message=f"{method.__name__} failed because '{str(e)}'",
             )
@@ -153,6 +154,7 @@ def plot_to_image(fig):
 
 class EnderLeafController(object):
     """Main controller class for the EnderLeaf system, managing camera, lights, stage, and communication"""
+
     # MARK: Init
     def __init__(self):
         # Camera initialization and configuration
@@ -224,16 +226,16 @@ class EnderLeafController(object):
             _ = await self.capture_array()
             if await self.printer_ready() is True:
                 x, y, z = await self.get_position()
-                await self.send_position(x, y, z)
+                await self.socket_send_position(x, y, z)
         except Exception as e:
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.EXCEPTION, message=f"Ping failed: {str(e)}"
             )
             return False
         else:
             return True
 
-    async def identify(self, color:tuple, wait:float):
+    async def identify(self, color: tuple, wait: float):
         """Identifies the node by cycling lighting and capturing images
 
         Args:
@@ -249,14 +251,14 @@ class EnderLeafController(object):
             await asyncio.sleep(0.2)
             await self.capture_array()
         except Exception as e:
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.EXCEPTION, message=f"Identify failed: {str(e)}"
             )
             return False
         else:
             return True
 
-    async def send_message(self, message):
+    async def socketsend_message(self, message):
         """Sends a text message to the connected socket and through the message callback"""
         if self.socket is not None:
             await self.socket.send(
@@ -265,7 +267,7 @@ class EnderLeafController(object):
         if self.on_send_message is not None:
             await self.on_send_message(message)
 
-    async def send_image(self, image):
+    async def socket_send_image(self, image):
         """Resizes and encodes an image to base64 before sending to the socket sends the original image to the callback callback"""
         if self.socket is not None:
             await self.socket.send(
@@ -281,7 +283,7 @@ class EnderLeafController(object):
         if self.on_send_image is not None:
             await self.on_send_image(image)
 
-    async def send_problem(self, level: LogLevel, message: str):
+    async def socket_send_problem(self, level: LogLevel, message: str):
         """Sends an error or warning message to the socket and callback"""
         if self.socket is not None:
             await self.socket.send(
@@ -290,7 +292,7 @@ class EnderLeafController(object):
         if self.on_send_problem is not None:
             await self.on_send_problem(level, message)
 
-    async def send_progress(self, step, total):
+    async def socket_send_progress(self, step, total):
         """Sends current progress (step, total) to the socket and callback"""
         if self.socket is not None:
             await self.socket.send(
@@ -299,7 +301,7 @@ class EnderLeafController(object):
         if self.on_send_progress is not None:
             await self.on_send_progress(step, total)
 
-    async def send_position_plot(self, index: int | list | None = None):
+    async def socket_send_position_plot(self, index: int | list | None = None):
         """Generates and sends a path status or disc status plot to the socket and callback"""
         if len(self._positions) == 0:
             fig = plot_path_status(z=await self.get_z())
@@ -342,7 +344,7 @@ class EnderLeafController(object):
         if self.on_send_focus_plot is not None:
             await self.on_send_focus_plot(fig)
 
-    async def send_data(self, data):
+    async def socket_send_data(self, data):
         """Sends arbitrary data to the socket and callback"""
         if self.socket is not None:
             await self.socket.send(
@@ -351,7 +353,7 @@ class EnderLeafController(object):
         if self.on_send_data is not None:
             await self.on_send_data(data)
 
-    async def send_config(self):
+    async def socket_send_config(self):
         """Sends the current controller configuration to the socket and callback"""
         if self.socket is not None:
             try:
@@ -363,7 +365,7 @@ class EnderLeafController(object):
                         SocketMessage(type=MsgType.CONFIG_DATA, key=k, value=v).dump()
                     )
             except Exception as e:
-                await self.send_problem(
+                await self.socket_send_problem(
                     level=LogLevel.EXCEPTION,
                     message=f"Failed to send config data: {str(e)}",
                 )
@@ -373,7 +375,7 @@ class EnderLeafController(object):
         if self.on_send_config is not None:
             await self.on_send_config(self.to_json())
 
-    async def send_result(self, level: LogLevel, message: str):
+    async def socket_send_result(self, level: LogLevel, message: str):
         """Sends an operation result message to the socket and callback"""
         if self.socket is not None:
             await self.socket.send(
@@ -382,7 +384,7 @@ class EnderLeafController(object):
         if self.on_send_result is not None:
             await self.on_send_result(level, message)
 
-    async def send_position(self, x, y, z: float):
+    async def socket_send_position(self, x, y, z: float):
         """Sends the current XYZ position to the socket and callback"""
         if self.socket is not None:
             await self.socket.send(
@@ -390,6 +392,47 @@ class EnderLeafController(object):
             )
         if self.on_send_position is not None:
             await self.on_send_position(x, y, z)
+
+    async def socket_toggle_lights(self, state: bool, wait=1) -> bool:
+        """Toggles the light shutter and updates camera exposure after receiving a socket request
+
+        Args:
+            state (bool): Shutter state (True for on, False for off)
+            wait (int, optional): Wait time for exposure to settle. Defaults to 1.
+        """
+        if self.socket is not None:
+            try:
+                await self.shutter(state=state, wait=wait)
+            except Exception as e:
+                await self.socket_send_problem(
+                    level=LogLevel.EXCEPTION,
+                    message=f"Failed to send config data: {str(e)}",
+                )
+                return False
+            else:
+                return True
+        else:
+            return False
+
+    async def socket_cycle_lights(self, wait=1) -> bool:
+        """Cycles to the next predefined lighting pattern and updates exposure in response to a socket request
+
+        Args:
+            wait (int, optional): Wait time for exposure to settle. Defaults to 1.
+        """
+        if self.socket is not None:
+            try:
+                await self.cycle_lights(wait=wait)
+            except Exception as e:
+                await self.socket_send_problem(
+                    level=LogLevel.EXCEPTION,
+                    message=f"Failed to send config data: {str(e)}",
+                )
+                return False
+            else:
+                return True
+        else:
+            return False
 
     def reset(self):
         """Resets controller configuration to default values"""
@@ -645,7 +688,7 @@ class EnderLeafController(object):
         """Toggles the light shutter and updates camera exposure
 
         Args:
-            state (bool): Shutter state (True for open, False for closed)
+            state (bool): Shutter state (True for on, False for off)
             wait (int, optional): Wait time for exposure to settle. Defaults to 1.
         """
         self.top_lights.shutter(state=state)
@@ -661,7 +704,7 @@ class EnderLeafController(object):
             self._ligths_cycle_index = 0
         else:
             self._ligths_cycle_index += 1
-        self.set_lights(LIGHTS_CONF[self._ligths_cycle_index], wait=wait)
+        await self.set_lights(LIGHTS_CONF[self._ligths_cycle_index], wait=wait)
 
     async def set_top_lights_brightness(self, brightness, wait=1):
         """Sets the brightness of the top lights and captures a preview
@@ -758,7 +801,7 @@ class EnderLeafController(object):
                 raise NotImplementedError(f"Unknown case {self.camera_state}")
 
         # Send the processed preview image to the connected client
-        await self.send_image(self.apply_image_crop(image=image))
+        await self.socket_send_image(self.apply_image_crop(image=image))
 
         return (
             crop_image(
@@ -841,7 +884,7 @@ class EnderLeafController(object):
         """
         result = self.check_stage() and self.check_homed()
         if result is False:
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.EXCEPTION, message="Printer not ready"
             )
         return result
@@ -873,7 +916,7 @@ class EnderLeafController(object):
             return False
         await self._stage.finish_moves()
         x, y, z = await self.get_position()
-        await self.send_position(x, y, z)
+        await self.socket_send_position(x, y, z)
         await self.capture_array()
 
     async def move_position(
@@ -896,7 +939,7 @@ class EnderLeafController(object):
         await self._stage.move_position(
             position, call_back=self.capture_array if update_preview is True else None
         )
-        await self.send_position_plot(index=index)
+        await self.socket_send_position_plot(index=index)
         await self.finish_moves()
 
     async def move_absolute(self, x, y, z, update_preview: bool = False):
@@ -950,15 +993,15 @@ class EnderLeafController(object):
         """
         await self.capture_array()
         if self.check_stage() is False:
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.EXCEPTION,
                 message="Unable to home, printer not connected",
             )
         try:
-            await self.send_message("Started homing")
+            await self.socketsend_message("Started homing")
             if await self._stage.safe_home(call_back=self.capture_array) is False:
                 await self.capture_array()
-                self.send_problem(
+                self.socket_send_problem(
                     level=LogLevel.WARNING, message="Failed to home, retrying"
                 )
                 if await self._stage.safe_home(call_back=self.capture_array) is False:
@@ -966,7 +1009,7 @@ class EnderLeafController(object):
             self._homed = True
             await self.finish_moves()
         except Exception as e:
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.EXCEPTION, message=f"Unable to home: {str(e)}"
             )
             return False
@@ -987,19 +1030,19 @@ class EnderLeafController(object):
                 if str(port) == port_name:
                     self._stage = Stage(port, 115200)
                     if await self.go_home() is True:
-                        await self.send_message(message="Homing successful")
+                        await self.socketsend_message(message="Homing successful")
                     else:
                         return False
                     break
             else:
-                self.send_problem(
+                self.socket_send_problem(
                     level=LogLevel.EXCEPTION,
                     message=f"Failed to to connect to requested port: '{str(port)}'",
                 )
             x, y, _ = await self.get_position()
             await self.move_absolute(x, y, self.focus_start_z, update_preview=True)
         except Exception as e:
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.EXCEPTION,
                 message=f"Unable to connect to printer: {str(e)}",
             )
@@ -1014,7 +1057,7 @@ class EnderLeafController(object):
         try:
             await self.move_position((bed.x_min, bed.y_max, bed.rest_height))
         except Exception as e:
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.EXCEPTION, message=f"Unable to go idle: {str(e)}"
             )
             return False
@@ -1024,7 +1067,7 @@ class EnderLeafController(object):
     async def go_park(self):
         """Moves the stage to the predefined parking position"""
         if await self.printer_ready() is False:
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.EXCEPTION,
                 message="Unable to park, printer not ready",
             )
@@ -1032,7 +1075,7 @@ class EnderLeafController(object):
         try:
             await self.move_position((bed.x_min, bed.y_max // 2, bed.rest_height))
         except Exception as e:
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.EXCEPTION, message=f"Unable to go park: {str(e)}"
             )
             return False
@@ -1055,16 +1098,16 @@ class EnderLeafController(object):
         if image is None:
             image = await self.capture_image()
         qr_data = await get_qr_data(
-            image, call_back=self.send_problem, need_info=need_info
+            image, call_back=self.socket_send_problem, need_info=need_info
         )
 
         async def try_qr_code(message: str, brightness: float | None = None):
             try:
-                await self.send_problem(level=LogLevel.WARNING, message=message)
+                await self.socket_send_problem(level=LogLevel.WARNING, message=message)
                 await asyncio.sleep(2)
                 return await get_qr_data(
                     await self.capture_image(),
-                    call_back=self.send_problem,
+                    call_back=self.socket_send_problem,
                     need_info=need_info,
                 )
             except:
@@ -1109,7 +1152,7 @@ class EnderLeafController(object):
             )
 
         if check_qr_code(qr_data, need_info=need_info) is False:
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.ERROR, message="Failed to read QR code"
             )
             qr_data = empty_qr()
@@ -1151,7 +1194,7 @@ class EnderLeafController(object):
             x,
             y,
         ]
-        await self.send_position_plot(index=[0])
+        await self.socket_send_position_plot(index=[0])
 
     async def get_focused_z(self, delta_z=1):
         """Performs a Z-scan to find the optimal focus position using specified metrics
@@ -1164,7 +1207,7 @@ class EnderLeafController(object):
         """
         if await self.printer_ready() is False:
             return
-        await self.send_message(message="Acquiring precise focus")
+        await self.socketsend_message(message="Acquiring precise focus")
         await self.set_focus_close()
         z_range = np.array(range(-self.focus_delta_z, self.focus_delta_z, delta_z))
         pos = await self.get_position()
@@ -1188,7 +1231,7 @@ class EnderLeafController(object):
             if score > mxScore:
                 mxScore = score
                 bestZ = z + self.focus_start_z
-            await self.send_progress(step=i, total=len(z_range))
+            await self.socket_send_progress(step=i, total=len(z_range))
         df_scores = pd.DataFrame(data=variances)
         for c in self.focus_methods:
             df_scores[c] = (df_scores[c] - df_scores[c].min()) / (
@@ -1290,7 +1333,7 @@ class EnderLeafController(object):
             await self.build_snake(x, y)
             return x, y, z
         except Exception as e:
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.EXCEPTION,
                 message=f"Failed to center on QR code: '{str(e)}'",
             )
@@ -1310,7 +1353,7 @@ class EnderLeafController(object):
 
     # MARK: Init Job
     async def init_job(self, precise_focusing: bool = True):
-        await self.send_message("Initializing job")
+        await self.socketsend_message("Initializing job")
         self._errors = 0
         if await self.printer_ready() is False:
             return
@@ -1324,12 +1367,12 @@ class EnderLeafController(object):
         except:
             exp_name = "ExpXXDMXX#IX#PXX"
             exp, inoc, plate = exp_name.split("#")
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.EXCEPTION,
                 message=f"Failed to detect QR code switching to default plate {plate} in experiemnt {exp}, inoc {inoc}",
             )
         else:
-            await self.send_message(
+            await self.socketsend_message(
                 message=f"Detected plate {plate} in experiemnt {exp}, inoc {inoc}",
             )
         return exp, inoc, plate, z
@@ -1452,14 +1495,14 @@ class EnderLeafController(object):
         self, precise_focusing: bool = True, center_on_leaf: bool = False
     ):
         if await self.printer_ready() is False:
-            await self.send_result(
+            await self.socket_send_result(
                 level=LogLevel.ERROR, message=f"Please connect printer."
             )
             return False
 
         remaining_sapce = get_available_hd()
         if remaining_sapce < MIN_HD_SPACE:
-            await self.send_result(
+            await self.socket_send_result(
                 level=LogLevel.CRITICAL,
                 message=f"Only {remaining_sapce:.2f}Gb remaining, at least {MIN_HD_SPACE}Gb needed. Unable to start acquisitions. Please empty drive.",
             )
@@ -1470,7 +1513,7 @@ class EnderLeafController(object):
         try:
             exp, inoc, plate, z = await self.init_job(precise_focusing=precise_focusing)
         except Exception as e:
-            await self.send_result(
+            await self.socket_send_result(
                 level=LogLevel.ERROR, message=f"Failed to initialize job: '{str(e)}'"
             )
             self.status = ELStatus.IDLE
@@ -1487,8 +1530,8 @@ class EnderLeafController(object):
         ).with_suffix(".csv")
         job_list = self.parse_positions()
         len_job_list = len(job_list)
-        await self.send_message("Acquiring leaf discs images")
-        for idx, p, c, r in job_list:
+        await self.socketsend_message("Acquiring leaf discs images")
+        for idx, p, r, c in job_list:
             try:
                 await self.move_position(np.append(p, z), index=idx)
                 for cycle_id, light_cycle in enumerate(self.light_cycles):
@@ -1513,7 +1556,7 @@ class EnderLeafController(object):
                                 str(file_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
                             )
                         except Exception as e:
-                            await self.send_problem(
+                            await self.socket_send_problem(
                                 level=LogLevel.EXCEPTION,
                                 message=f"Exception '{str(e)}' wheil saving image '{str(file_path)}'",
                             )
@@ -1521,18 +1564,18 @@ class EnderLeafController(object):
                             if write_ok is True:
                                 pass
                             else:
-                                await self.send_problem(
+                                await self.socket_send_problem(
                                     level=LogLevel.EXCEPTION,
                                     message=f"FAILED to write '{file_path.name}'",
                                 )
-                    await self.send_progress(step=idx, total=len_job_list)
+                    await self.socket_send_progress(step=idx, total=len_job_list)
             except Exception as e:
-                await self.send_problem(
+                await self.socket_send_problem(
                     level=LogLevel.EXCEPTION,
                     message=f"Exception while acquiring C{c}, R{r}: {str(e)}",
                 )
             if self.status == ELStatus.STOP_REQUESTED:
-                await self.send_problem(
+                await self.socket_send_problem(
                     level=LogLevel.WARNING, message="Stopping process"
                 )
                 break
@@ -1542,29 +1585,29 @@ class EnderLeafController(object):
 
         remaining_sapce = get_available_hd()
         if remaining_sapce < MIN_HD_SPACE:
-            await self.send_problem(
+            await self.socket_send_problem(
                 level=LogLevel.EXCEPTION,
                 message=f"Only {remaining_sapce:.2f}Gb remaining. Please empty drive before next acquisition.",
             )
 
         if self.status == ELStatus.STOP_REQUESTED:
-            await self.send_result(
+            await self.socket_send_result(
                 level=LogLevel.WAARNING,
                 message=f"User stopped process. {remaining_sapce:.2f}Gb remaining in drive",
             )
         else:
             write_dataframe(df, data_file_name)
             if self._errors == 0:
-                await self.send_result(
+                await self.socket_send_result(
                     level=LogLevel.INFO,
                     message=f"All frames processed successfully. {remaining_sapce:.2f}Gb remaining in drive",
                 )
             else:
-                await self.send_result(
+                await self.socket_send_result(
                     level=LogLevel.ERROR,
                     message=f"All frames processed {self._errors} error(s) occured, see log for details. {remaining_sapce:.2f}Gb remaining in drive",
                 )
-        await self.send_position_plot()
+        await self.socket_send_position_plot()
 
         return True
 
@@ -1594,7 +1637,7 @@ class EnderLeafController(object):
                 self._good_discs.append(idx)
             else:
                 self._bad_discs.append(idx)
-            await self.send_position_plot(index=idx + 1)
+            await self.socket_send_position_plot(index=idx + 1)
             await asyncio.sleep(1)
 
         self.crop_mode = old_crop_mode
