@@ -164,7 +164,7 @@ class Enderlights:
         self[start:end] = (end - start) * [value]
 
     def shutter(self, state: bool, value: list | tuple = (255, 255, 255)) -> None:
-        if state is True:
+        if state:
             self.fill(value)
         else:
             self.fill((0, 0, 0))

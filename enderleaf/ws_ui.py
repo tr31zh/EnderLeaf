@@ -97,7 +97,7 @@ FULLSCREEN_COLOUR_ACCENT = ft.Colors.BLUE_100
 COLOUR_BACKGROUND = ft.Colors.SURFACE_CONTAINER_HIGH
 COLOUR_DETAIL = ft.Colors.GREY_600
 
-TRANSFER_WAIT_DELAY = 10
+TRANSFER_WAIT_DELAY = 60
 
 # One completion event per node, used to synchronise task execution across the
 # distributed nodes. Cleared after every run_task call.
@@ -1335,26 +1335,26 @@ bt_check_corners = get_side_bar_button(
     command=ControllerCommands.CHECK_CORNERS, icon=ft.Icons.ALL_OUT
 )
 bt_toggle_lights = get_side_bar_button(
-    command=ControllerCommands.TOGGLE_LIGHTS, icon=ft.Icons.LIGHT_MODE, visible=False
+    command=ControllerCommands.TOGGLE_LIGHTS, icon=ft.Icons.LIGHT_MODE, visible=True
 )
 bt_cycle_lights = get_side_bar_button(
-    command=ControllerCommands.CYCLE_LIGHTS, icon=ft.Icons.AUTORENEW, visible=False
+    command=ControllerCommands.CYCLE_LIGHTS, icon=ft.Icons.AUTORENEW, visible=True
 )
 bt_close = get_side_bar_button(
     ControllerCommands.FOCUS_CLOSE,
     icon=ft.Icons.CENTER_FOCUS_STRONG_ROUNDED,
-    visible=False,
+    visible=True,
 )
 bt_auto = get_side_bar_button(
-    ControllerCommands.FOCUS_AUTO, icon=ft.Icons.AUTO_AWESOME, visible=False
+    ControllerCommands.FOCUS_AUTO, icon=ft.Icons.AUTO_AWESOME, visible=True
 )
 bt_far = get_side_bar_button(
     ControllerCommands.FOCUS_FAR,
     icon=ft.Icons.FILTER_CENTER_FOCUS_ROUNDED,
-    visible=False,
+    visible=True,
 )
 bt_get_config = get_side_bar_button(
-    ControllerCommands.GET_CONFIG, icon=ft.Icons.SETTINGS_ROUNDED, visible=False
+    ControllerCommands.GET_CONFIG, icon=ft.Icons.SETTINGS_ROUNDED, visible=True
 )
 
 # Position dropdown used by the MOVE_TO command (positions 1 through 81).

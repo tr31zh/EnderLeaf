@@ -406,7 +406,7 @@ class EnderLeafController(object):
             except Exception as e:
                 await self.socket_send_problem(
                     level=LogLevel.EXCEPTION,
-                    message=f"Failed to send config data: {str(e)}",
+                    message=f"Failed to toggle lights: {str(e)}",
                 )
                 return False
             else:
@@ -426,7 +426,7 @@ class EnderLeafController(object):
             except Exception as e:
                 await self.socket_send_problem(
                     level=LogLevel.EXCEPTION,
-                    message=f"Failed to send config data: {str(e)}",
+                    message=f"Failed to cycle lights: {str(e)}",
                 )
                 return False
             else:

@@ -328,7 +328,7 @@ async def node_toggle_lights(websocket, **kwargs):
     await websocket.send(
         SocketMessage(
             type=MsgType.MESSAGE,
-            message="Toggling lights. No other operation is allowed",
+            message=f"Toggling lights {'ON' if new_state else 'OFF'}. No other operation is allowed",
         ).dump()
     )
     await websocket.send(
