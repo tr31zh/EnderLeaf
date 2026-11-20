@@ -344,15 +344,6 @@ class EnderLeafController(object):
         if self.on_send_focus_plot is not None:
             await self.on_send_focus_plot(fig)
 
-    async def socket_send_data(self, data):
-        """Sends arbitrary data to the socket and callback"""
-        if self.socket is not None:
-            await self.socket.send(
-                SocketMessage(type=MsgType.CONFIG_DATA, image=data).dump()
-            )
-        if self.on_send_data is not None:
-            await self.on_send_data(data)
-
     async def socket_send_config(self):
         """Sends the current controller configuration to the socket and callback"""
         if self.socket is not None:
@@ -705,50 +696,6 @@ class EnderLeafController(object):
         else:
             self._ligths_cycle_index += 1
         await self.set_lights(LIGHTS_CONF[self._ligths_cycle_index], wait=wait)
-
-    async def set_top_lights_brightness(self, brightness, wait=1):
-        """Sets the brightness of the top lights and captures a preview
-
-        Args:
-            brightness (float): Brightness level (0.0 to 1.0)
-            wait (int, optional): Wait time before capture. Defaults to 1.
-        """
-        self.top_lights.brightness = brightness
-        await asyncio.sleep(wait)
-        await self.capture_array()
-
-    async def set_sensor_mode(self, sensor_mode, wait=0.5):
-        """Changes the camera sensor mode and captures a preview
-
-        Args:
-            sensor_mode: The target sensor mode configuration
-            wait (float, optional): Wait time before capture. Defaults to 0.5.
-        """
-        self.camera.configure(self.camera.create_video_configuration(raw=sensor_mode))
-        await asyncio.sleep(wait)
-        await self.capture_array()
-
-    async def set_focus_mode(self, focus_mode, wait=0.5):
-        """Sets the autofocus mode and captures a preview
-
-        Args:
-            focus_mode: The target autofocus mode
-            wait (float, optional): Wait time before capture. Defaults to 0.5.
-        """
-        self.camera.set_controls({"AfMode": focus_mode})
-        await asyncio.sleep(wait)
-        await self.capture_array()
-
-    async def set_focus_distance(self, focus_distance, wait=0.5):
-        """Sets the manual lens position and captures a preview
-
-        Args:
-            focus_distance (float): Target lens position
-            wait (float, optional): Wait time before capture. Defaults to 0.5.
-        """
-        self.camera.set_controls({"LensPosition": focus_distance})
-        await asyncio.sleep(wait)
-        await self.capture_array()
 
     @maybe_method
     async def autofocus_cycle(self, wait=1):

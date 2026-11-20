@@ -97,8 +97,6 @@ FULLSCREEN_COLOUR_ACCENT = ft.Colors.BLUE_100
 COLOUR_BACKGROUND = ft.Colors.SURFACE_CONTAINER_HIGH
 COLOUR_DETAIL = ft.Colors.GREY_600
 
-TRANSFER_WAIT_DELAY = 60
-
 # One completion event per node, used to synchronise task execution across the
 # distributed nodes. Cleared after every run_task call.
 completion_events = {uri: asyncio.Event() for uri in NODES}
@@ -429,6 +427,8 @@ class NodeUi:
             rows=[],
         )
 
+        # Set when the transfer is allowed to run; used to wake a paused waiter.
+        self._resume_event = asyncio.Event()
         self._ft_status = FileTransferStatus.PAUSED
         self.ft_status_text = ft.Text(self._ft_status.value)
         self.ft_progress_txt = ft.Text("Transfer progress", width=200)
@@ -699,6 +699,7 @@ class NodeUi:
             validated_file.is_file()
             and validated_file.stat().st_size == sftp.stat(str(src_file)).st_size
         ):
+            # pass
             sftp.remove(str(src_file))
         return True
 
@@ -743,6 +744,7 @@ class NodeUi:
                 an SSH or SFTP error occurred.
         """
         ssh = paramiko.SSHClient()
+        remaining_files = 0
         try:
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(
@@ -763,7 +765,7 @@ class NodeUi:
                     node_address=self.ip,
                 )
                 if self.ft_status == FileTransferStatus.ACTIVE:
-                    self.ft_status = FileTransferStatus.STANDBY
+                    self.ft_status = FileTransferStatus.PAUSED
                 return True
             try:
                 self.create_local_folders(sftp=sftp)
@@ -774,15 +776,14 @@ class NodeUi:
                     await asyncio.sleep(0)
                     # Stop early if the transfer was stopped or finished.
                     if self.ft_status in [
+                        FileTransferStatus.STOP_REQUESTED,
                         FileTransferStatus.STOPPED,
-                        FileTransferStatus.FINISHED,
                     ]:
                         break
                     # Pause until the node is free, then abort if a non-active
                     # status was requested while waiting.
                     if self.ft_status == FileTransferStatus.PAUSED:
-                        while self.ft_status == FileTransferStatus.PAUSED:
-                            await asyncio.sleep(10)
+                        await self._resume_event.wait()
                         if self.ft_status != FileTransferStatus.ACTIVE:
                             break
                     self.handle_file(sftp=sftp, src_file=src_file)
@@ -796,15 +797,18 @@ class NodeUi:
                 log(level=LogLevel.ERROR, message=f"SFTP exception: {str(e)}")
                 return False
             finally:
-                # An active round that finishes with no errors idles to STANDBY
-                # so the parent loop waits before retrying.
-                if self.ft_status == FileTransferStatus.ACTIVE:
-                    self.ft_status = FileTransferStatus.STANDBY
+                remaining_files = len(
+                    list_remote_files(sftp, "/home/ender/code/EnderLeaf/output")
+                )
                 sftp.close()
         except Exception as e:
             log(level=LogLevel.ERROR, message=f"SSH exception: {str(e)}")
             return False
         finally:
+            # An active round that finishes with no errors idles to STANDBY
+            # so the parent loop waits before retrying.
+            if self.ft_status == FileTransferStatus.ACTIVE and remaining_files == 0:
+                self.ft_status = FileTransferStatus.PAUSED
             ssh.close()
 
     async def transfer_files(self):
@@ -812,7 +816,7 @@ class NodeUi:
 
         Repeatedly dispatches transfer rounds while honoring the transfer status
         machine: ACTIVE runs a round, STANDBY idles then resumes, PAUSED waits,
-        and STOPPED/FINISHED terminate the loop. This task is launched once per
+        and STOP_REQUESTED/FINISHED terminate the loop. This task is launched once per
         node on the main node and runs until the transfer is finished.
         """
         while True:
@@ -820,24 +824,16 @@ class NodeUi:
             match self.ft_status:
                 case FileTransferStatus.ACTIVE:
                     pass
-                case FileTransferStatus.STANDBY:
-                    # Idle between rounds, then resume unless a status change
-                    # happened while waiting.
-                    await asyncio.sleep(TRANSFER_WAIT_DELAY)
-                    if self.ft_status == FileTransferStatus.STANDBY:
-                        self.ft_status = FileTransferStatus.ACTIVE
-                    else:
-                        continue
                 case FileTransferStatus.PAUSED:
                     # Node is busy: wait out the delay and retry without running a round.
-                    await asyncio.sleep(TRANSFER_WAIT_DELAY)
+                    await self._resume_event.wait()
                     continue
-                case FileTransferStatus.STOPPED:
+                case FileTransferStatus.STOP_REQUESTED:
                     # A stop was requested: move to FINISHED and end the loop.
-                    self.ft_status = FileTransferStatus.FINISHED
+                    self.ft_status = FileTransferStatus.STOPPED
                     await asyncio.sleep(0)
                     break
-                case FileTransferStatus.FINISHED:
+                case FileTransferStatus.STOPPED:
                     # Already finished: yield and end the loop.
                     await asyncio.sleep(0)
                     break
@@ -892,7 +888,7 @@ class NodeUi:
     def ft_status(self, value):
         """Set the file-transfer status, enforcing allowed transitions.
 
-        Transitions out of the STOPPED or FINISHED states are rejected so that a
+        Transitions out of the STOP_REQUESTED or FINISHED states are rejected so that a
         finished or stopped transfer cannot be resumed. A human-readable message
         is logged for every accepted transition.
 
@@ -905,9 +901,9 @@ class NodeUi:
         # ):
         #     print(traceback.print_stack())
         # print(f"{self._ft_status} -> {value}")
-        if self._ft_status == FileTransferStatus.STOPPED and value not in [
+        if self._ft_status == FileTransferStatus.STOP_REQUESTED and value not in [
+            FileTransferStatus.STOP_REQUESTED,
             FileTransferStatus.STOPPED,
-            FileTransferStatus.FINISHED,
         ]:
             log(
                 level=LogLevel.WARNING,
@@ -916,8 +912,8 @@ class NodeUi:
             )
             return
         if (
-            self._ft_status == FileTransferStatus.FINISHED
-            and value != FileTransferStatus.FINISHED
+            self._ft_status == FileTransferStatus.STOPPED
+            and value != FileTransferStatus.STOPPED
         ):
             log(
                 level=LogLevel.WARNING,
@@ -926,19 +922,24 @@ class NodeUi:
             )
             return
 
+        if value == FileTransferStatus.PAUSED:
+            # ensure a future pause actually blocks
+            self._resume_event.clear()
+        else:
+            # tell any paused waiter it can proceed
+            self._resume_event.set()
+
         self._ft_status = value
         self.ft_status_text.value = self._ft_status.value
         match self._ft_status:
             case FileTransferStatus.ACTIVE:
                 message = "Starting file transfer"
-            case FileTransferStatus.STANDBY:
-                message = "No more images to transfer, will check again soon"
             case FileTransferStatus.PAUSED:
                 message = "Node busy, deffering file transfer"
-            case FileTransferStatus.STOPPED:
+            case FileTransferStatus.STOP_REQUESTED:
                 message = "Stopping transfer files task"
-            case FileTransferStatus.FINISHED:
-                message = "Application closing, stopping all transfers"
+            case FileTransferStatus.STOPPED:
+                message = "Application closing, transfer tasks stopped"
             case _:
                 raise NotADirectoryError(
                     f"Unknwon file transfer status: '{self._ft_status}"
@@ -1354,7 +1355,7 @@ bt_far = get_side_bar_button(
     visible=True,
 )
 bt_get_config = get_side_bar_button(
-    ControllerCommands.GET_CONFIG, icon=ft.Icons.SETTINGS_ROUNDED, visible=True
+    ControllerCommands.GET_CONFIG, icon=ft.Icons.SETTINGS_ROUNDED, visible=False
 )
 
 # Position dropdown used by the MOVE_TO command (positions 1 through 81).
@@ -1541,11 +1542,11 @@ def confirm_exit_dialog(dialog_text: str, actions: list):
 
 async def stop_for_transfer_tasks():
     for nu in node_uis.values():
-        nu.ft_status = FileTransferStatus.STOPPED
+        nu.ft_status = FileTransferStatus.STOP_REQUESTED
     while True:
         waiting_count = 0
         for nu in node_uis.values():
-            if nu.ft_status != FileTransferStatus.FINISHED:
+            if nu.ft_status != FileTransferStatus.STOPPED:
                 waiting_count += 1
         await asyncio.sleep(2)
         if waiting_count == 0:

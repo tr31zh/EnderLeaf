@@ -187,7 +187,6 @@ class NodeViewOption(str, Enum):
 class FileTransferStatus(str, Enum):
     """Status options for the file transfer task"""
     ACTIVE = "File tranfer in progress"
-    STANDBY = "File transfer on standby"
     PAUSED = "File transfer paused"
-    STOPPED = "File transfer stopped"
-    FINISHED = "All transfers cancelled"
+    STOP_REQUESTED = "Stopping file transfer tasks"
+    STOPPED = "All transfers stopped"
