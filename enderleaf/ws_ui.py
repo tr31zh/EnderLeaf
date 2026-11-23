@@ -770,6 +770,12 @@ class NodeUi:
             try:
                 self.create_local_folders(sftp=sftp)
                 src_files = list_remote_files(sftp, "/home/ender/code/EnderLeaf/output")
+                if len(src_files) > 0:
+                    log(
+                        level=LogLevel.INFO,
+                        message="Starting file transfer",
+                        node_address=self.ip,
+                    )
                 # Download each new or changed remote file, validate it, and
                 # queue fully-validated files for remote deletion.
                 for i, src_file in enumerate(src_files):
@@ -804,11 +810,12 @@ class NodeUi:
         except Exception as e:
             log(level=LogLevel.ERROR, message=f"SSH exception: {str(e)}")
             return False
-        finally:
-            # An active round that finishes with no errors idles to STANDBY
-            # so the parent loop waits before retrying.
+        else:
+            # An active round that finishes with no errors idles to PAUSED
             if self.ft_status == FileTransferStatus.ACTIVE and remaining_files == 0:
                 self.ft_status = FileTransferStatus.PAUSED
+            return True
+        finally:
             ssh.close()
 
     async def transfer_files(self):
@@ -841,8 +848,18 @@ class NodeUi:
                     raise NotADirectoryError(
                         f"Unknwon file transfer status: '{self.ft_status}"
                     )
-            # Run the transfer round for the ACTIVE/STANDBY-resumed cases.
-            await self.transfer_loop()
+            # Run the transfer round for the ACTIVE/PAUSED-resumed cases.
+            if (
+                not await self.transfer_loop()
+                and self.ft_status == FileTransferStatus.ACTIVE
+            ):
+                # If loop ended in exception try again in 30 seconds
+                log(
+                    level=LogLevel.INFO,
+                    message="Error while sending files, next attept in 30 seconds",
+                    node_address=self.ip,
+                )
+                await asyncio.sleep(30)
         log(
             level=LogLevel.INFO,
             message="Ended file transfer task",
