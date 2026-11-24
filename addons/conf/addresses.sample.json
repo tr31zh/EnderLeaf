@@ -1,0 +1,7 @@
+{
+  "nodes": [
+    "<ip-of-node-1>",
+    "<ip-of-node-2>"
+  ],
+  "main_node": "<either-true-or-false>"
+}

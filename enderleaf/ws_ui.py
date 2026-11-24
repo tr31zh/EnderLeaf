@@ -76,14 +76,14 @@ if LOCAL_CLIENTS is True or not addresses:
     NUM_NODES = 4
     PORTS = [i + 8760 for i in range(NUM_NODES)]
     NODES = [f"ws://localhost:{p}" for p in PORTS]
+    MAIN_NODE = True
 else:
     # Distributed mode: resolve the host's own IP address and compare it with the
     # configured main node IP to decide whether this client is the main node.
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.connect(("1.2.3.4", 1))
     NODES = [f"ws://{ip}:8765" for ip in addresses["nodes"]]
-
-MAIN_NODE = platform.system().lower() == "darwin"
+    MAIN_NODE = addresses.get("main_node", False)
 
 # MARK: UI configuration constants
 # Per-node identity colors, identify timing, and shared visual styling values.
@@ -636,6 +636,7 @@ class NodeUi:
                 )
             )
 
+# MARK: File transfer
     def handle_file(
         self, sftp: paramiko.sftp_client.SFTPClient, src_file: Path
     ) -> bool:

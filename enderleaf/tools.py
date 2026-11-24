@@ -14,14 +14,14 @@ import pandas as pd
 from enderleaf.const import TIME_FORMAT
 
 
-def format_time(seconds):
-    """Transforms seconds in human readable time string
+def format_time(seconds) -> str:
+    """Transform seconds into a human readable time string
 
-    Arguments:
-        seconds {float} -- seconds to convert
+    Args:
+        seconds (float): Seconds to convert.
 
     Returns:
-        string -- seconds as human readable string
+        str: Seconds as a human readable string.
     """
 
     mg, sg = divmod(seconds, 60)
@@ -30,13 +30,13 @@ def format_time(seconds):
 
 
 def time_method(f):
-    """Decorator: prints execution time
+    """Decorator that prints a function's execution time
 
-    Arguments:
-        f {function} -- function to decorate
+    Args:
+        f (function): Function to decorate.
 
     Returns:
-        function -- created function
+        function: The decorated function.
     """
 
     def new_function(*args, **kwargs):
@@ -49,7 +49,16 @@ def time_method(f):
     return new_function
 
 
-def format_datetime(t=None, time_format=TIME_FORMAT):
+def format_datetime(t=None, time_format=TIME_FORMAT) -> str:
+    """Return a formatted datetime string
+
+    Args:
+        t (datetime, optional): Datetime to format. If None, the current local time is used.
+        time_format (str, optional): Strftime format string. Defaults to TIME_FORMAT.
+
+    Returns:
+        str: The formatted datetime string.
+    """
     return dt.now().strftime(time_format) if t is None else t.strftime(time_format)
 
 
@@ -99,12 +108,26 @@ def write_dataframe(df: pd.DataFrame, path: Path, sep: str = ";") -> pd.DataFram
     return df
 
 
-def get_available_hd():
+def get_available_hd() -> float:
+    """Return the free disk space in the current directory
+
+    Returns:
+        float: Available hard-disk space in gibibytes (GiB).
+    """
     return psutil.disk_usage(".").free / 1024**3
 
 
-def scaled_rgb(mag, color_min, color_max):
-    """Return a tuple of integers, as used in AWT/Java plots."""
+def scaled_rgb(mag, color_min, color_max) -> tuple:
+    """Return a tuple of integers, as used in AWT/Java plots
+
+    Args:
+        mag (int): Value to map to a color.
+        color_min (int): Minimum value (mapped to blue).
+        color_max (int): Maximum value (mapped to yellow).
+
+    Returns:
+        tuple: RGB tuple of ints in the range 0-255.
+    """
     try:
         x = float(mag - color_min) / (color_max - color_min)
     except ZeroDivisionError:
@@ -116,10 +139,13 @@ def scaled_rgb(mag, color_min, color_max):
 
 
 def build_color_steps(step_count: int) -> list:
-    """
-    Builds a list containing step_count different colors from blue to yellow
-    :param step_count:
-    :return:
+    """Build a list of step_count different colors, from blue to yellow
+
+    Args:
+        step_count (int): Number of colors in the list.
+
+    Returns:
+        list: List of RGB tuples (see scaled_rgb).
     """
     if step_count <= 1:
         return [(255, 0, 255)]
@@ -130,7 +156,16 @@ def build_color_steps(step_count: int) -> list:
         ]
 
 
-def list_remote_files(sftp: paramiko.sftp_client.SFTPClient, path: str):
+def list_remote_files(sftp: paramiko.sftp_client.SFTPClient, path: str) -> list[Path]:
+    """Recursively list the regular files under a remote SFTP path
+
+    Args:
+        sftp (paramiko.sftp_client.SFTPClient): Open SFTP client.
+        path (str): Remote path to list.
+
+    Returns:
+        list[Path]: Paths of all regular files found under path.
+    """
     result = []
     for item in sftp.listdir_attr(path):
         if stat.S_ISREG(item.st_mode):
@@ -145,14 +180,32 @@ def list_remote_files(sftp: paramiko.sftp_client.SFTPClient, path: str):
             pass
     return result
 
-def split_file_list(files:list[Path])->defaultdict:
+
+def split_file_list(files: list[Path]) -> defaultdict:
+    """Group a list of files by their suffix
+
+    Args:
+        files (list[Path]): Files to group.
+
+    Returns:
+        defaultdict: Mapping of file suffix to the list of files with that suffix.
+    """
     result = defaultdict(list)
     for file in files:
         result[file.suffix].append(file)
     return result
 
 
-def list_remote_folders(sftp: paramiko.sftp_client.SFTPClient, path: str):
+def list_remote_folders(sftp: paramiko.sftp_client.SFTPClient, path: str) -> list[Path]:
+    """Recursively list the folders under a remote SFTP path
+
+    Args:
+        sftp (paramiko.sftp_client.SFTPClient): Open SFTP client.
+        path (str): Remote path to list.
+
+    Returns:
+        list[Path]: Paths of all folders found under path (including path itself).
+    """
     result = [Path(path)]
     for item in sftp.listdir_attr(path):
         if stat.S_ISDIR(item.st_mode):

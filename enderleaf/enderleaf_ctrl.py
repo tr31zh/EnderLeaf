@@ -55,7 +55,6 @@ from enderleaf.enums import (
     LEN_LIGHTS_CONF,
 )
 from enderleaf.socket_message import SocketMessage
-from enderleaf.streaming import StreamingOutput
 from enderleaf.focus_metrics import compute_focus_metric
 from enderleaf.tools import (
     ensure_folder,
@@ -118,6 +117,11 @@ def maybe_method(method):
 
     @wraps(method)
     async def _impl(self, *method_args, **method_kwargs):
+        """Wrapped implementation that propagates failures to the connected socket
+
+        On any exception a problem message is sent and False is returned; otherwise
+        the original return value is passed through.
+        """
         try:
             method_output = await method(self, *method_args, **method_kwargs)
         except Exception as e:
@@ -157,6 +161,7 @@ class EnderLeafController(object):
 
     # MARK: Init
     def __init__(self):
+        """Initializes the camera, LED ring, plate/focus defaults, and socket state"""
         # Camera initialization and configuration
         self.output = None
         self.camera = Picamera2()
@@ -186,7 +191,7 @@ class EnderLeafController(object):
         self.best_focus_method = FM_BREN
 
         # Lighting configuration
-        self.top_lights = Enderlights(default_leds["groov_led"], brightness=1)
+        self.led_ring = Enderlights(default_leds["groov_led"], brightness=1)
         self.light_cycles = [LightsCycle.ONE_FOURTH]
 
         # Internal state tracking
@@ -243,11 +248,11 @@ class EnderLeafController(object):
             wait (float): Wait time between captures
         """
         try:
-            self.top_lights.rgb(color=color)
+            self.led_ring.rgb(color=color)
             await asyncio.sleep(0.2)
             await self.capture_array()
             await asyncio.sleep(wait)
-            self.top_lights.rgb(color=(255, 255, 255))
+            self.led_ring.rgb(color=(255, 255, 255))
             await asyncio.sleep(0.2)
             await self.capture_array()
         except Exception as e:
@@ -438,7 +443,7 @@ class EnderLeafController(object):
         self.plate_col_count = 9
         self.focus_start_z = 36
         self.focus_delta_z = 10
-        self.top_lights.brightness = 1.0
+        self.led_ring.brightness = 1.0
 
     def log(self, kind, message: str):
         """Logs a message using the specified LogLevel"""
@@ -585,12 +590,15 @@ class EnderLeafController(object):
         self.camera.set_controls(control_data)
 
     async def set_exposure(self, wait=1):
-        """Adjusts camera exposure and gains based on current top light brightness
+        """Adjusts camera exposure and gains based on current LED ring brightness
 
         Args:
             wait (int, optional): Wait time after applying controls. Defaults to 1.
         """
-        avg_lights = self.top_lights.mean
+        # The mean brightness equals 255 divided by the number of lit cardinal
+        # quarters, so each value below maps a specific lighting configuration to
+        # a tuned manual exposure; any other average falls back to auto exposure.
+        avg_lights = self.led_ring.mean
         if avg_lights == 255:
             cam_controls = {
                 "AeEnable": False,
@@ -650,20 +658,20 @@ class EnderLeafController(object):
         await asyncio.sleep(wait)
         await self.capture_array()
 
-    async def set_top_lights(self, state: bool, card_points: list | None = None):
-        """Toggles the top lights on/off or sets specific cardinal directions
+    async def set_led_ring(self, state: bool, card_points: list | None = None):
+        """Toggles the LED ring on/off or sets specific cardinal directions
 
         Args:
             state (bool): Power state (True for on, False for off)
             card_points (list, optional): List of cardinal points to light up. Defaults to None.
         """
         if state is False:
-            self.top_lights.shutter(False)
+            self.led_ring.shutter(False)
         elif card_points is None:
-            self.top_lights.shutter(state)
+            self.led_ring.shutter(state)
         else:
-            self.top_lights.shutter(False)
-            self.top_lights.set_cardinals(card_points=card_points)
+            self.led_ring.shutter(False)
+            self.led_ring.set_cardinals(card_points=card_points)
 
     async def set_lights(self, lights: list, wait=1):
         """Sets specific lighting patterns and updates camera exposure
@@ -672,7 +680,7 @@ class EnderLeafController(object):
             lights (list): List of cardinal points to activate
             wait (int, optional): Wait time for exposure to settle. Defaults to 1.
         """
-        self.top_lights.set_cardinals(lights)
+        self.led_ring.set_cardinals(lights)
         await self.set_exposure(wait=wait)
 
     async def shutter(self, state: bool, wait=1):
@@ -682,7 +690,7 @@ class EnderLeafController(object):
             state (bool): Shutter state (True for on, False for off)
             wait (int, optional): Wait time for exposure to settle. Defaults to 1.
         """
-        self.top_lights.shutter(state=state)
+        self.led_ring.shutter(state=state)
         await self.set_exposure(wait=wait)
 
     async def cycle_lights(self, wait=1):
@@ -793,7 +801,7 @@ class EnderLeafController(object):
         if self._camera_state not in [CameraState.IDLE, CameraState.SIMULATION]:
             self.camera.stop()
             self.camera.close()
-            self.top_lights.shutter(state=False)
+            self.led_ring.shutter(state=False)
             self._camera_state = CameraState.IDLE
 
     async def switch_state(self, new_mode: CameraState):
@@ -1049,6 +1057,21 @@ class EnderLeafController(object):
         )
 
         async def try_qr_code(message: str, brightness: float | None = None):
+            """Attempts a single QR code read under the given lighting strategy
+
+            Emits a warning before retrying. If ``brightness`` is provided the ring
+            brightness is restored to it afterwards, otherwise the shutter is left
+            on so the ring keeps illuminating the QR code.
+
+            Args:
+                message (str): Description of the strategy, logged as a warning.
+                brightness (float | None, optional): Ring brightness to restore in
+                    the ``finally`` block. When None, the shutter is turned on
+                    instead. Defaults to None.
+
+            Returns:
+                dict: The decoded QR data from the attempt.
+            """
             try:
                 await self.socket_send_problem(level=LogLevel.WARNING, message=message)
                 await asyncio.sleep(2)
@@ -1063,13 +1086,15 @@ class EnderLeafController(object):
                 if brightness is None:
                     await self.shutter(True, 2)
                 else:
-                    self.top_lights.brightness = old_brightness
+                    self.led_ring.brightness = old_brightness
                 await asyncio.sleep(2)
 
-        # Attempt different lighting strategies if initial detection fails
+        # If the initial read fails, escalate through increasingly aggressive
+        # lighting strategies (half brightness, LEDs off, then each cardinal
+        # light in turn); fall back to an empty QR if none of them succeed.
         if check_qr_code(qr_data, need_info=need_info) is False:
-            old_brightness = self.top_lights.brightness
-            self.top_lights.brightness = 0.5
+            old_brightness = self.led_ring.brightness
+            self.led_ring.brightness = 0.5
             qr_data = await try_qr_code(
                 "QR code detection failed, tryng with half brtightness",
                 brightness=old_brightness,
@@ -1078,22 +1103,22 @@ class EnderLeafController(object):
             await self.shutter(False, 2)
             qr_data = await try_qr_code("QR code detection failed, tryng with LEDs off")
         if check_qr_code(qr_data, need_info=need_info) is False:
-            self.set_top_lights(True, [CardPoint.NORTH])
+            self.set_led_ring(True, [CardPoint.NORTH])
             qr_data = await try_qr_code(
                 "QR code detection failed, tryng with north light"
             )
         if check_qr_code(qr_data, need_info=need_info) is False:
-            self.set_top_lights(True, [CardPoint.EAST])
+            self.set_led_ring(True, [CardPoint.EAST])
             qr_data = await try_qr_code(
                 "QR code detection failed, tryng with east light"
             )
         if check_qr_code(qr_data, need_info=need_info) is False:
-            self.set_top_lights(True, [CardPoint.SOUTH])
+            self.set_led_ring(True, [CardPoint.SOUTH])
             qr_data = await try_qr_code(
                 "QR code detection failed, tryng with south light"
             )
         if check_qr_code(qr_data, need_info=need_info) is False:
-            self.set_top_lights(True, [CardPoint.WEST])
+            self.set_led_ring(True, [CardPoint.WEST])
             qr_data = await try_qr_code(
                 "QR code detection failed, tryng with west light"
             )
@@ -1288,6 +1313,14 @@ class EnderLeafController(object):
             self.restore_crop_values()
 
     async def check_corners(self, precise_focusing: bool = True):
+        """Checks the plate corners for alignment by visiting the extreme positions
+
+        Centers on the QR code, builds the scan path, then moves to each corner
+        (extreme position) with a short pause and finally returns to the origin.
+
+        Args:
+            precise_focusing (bool, optional): If True, uses precise focusing. Defaults to True.
+        """
         if await self.printer_ready() is False:
             return
         await self.set_focus_close()
@@ -1300,6 +1333,18 @@ class EnderLeafController(object):
 
     # MARK: Init Job
     async def init_job(self, precise_focusing: bool = True):
+        """Initializes an acquisition job and identifies the plate
+
+        Centers on the QR code, reads its info string, and parses it into the
+        experiment, inoculum, and plate identifiers, falling back to a default
+        plate when the code cannot be read.
+
+        Args:
+            precise_focusing (bool, optional): If True, runs a precise Z-scan. Defaults to True.
+
+        Returns:
+            tuple: (exp, inoc, plate, z) or None when the printer is not ready.
+        """
         await self.socketsend_message("Initializing job")
         self._errors = 0
         if await self.printer_ready() is False:
@@ -1325,6 +1370,16 @@ class EnderLeafController(object):
         return exp, inoc, plate, z
 
     def parse_positions(self):
+        """Maps the stored scan path to per-disc job entries
+
+        Pairs each stored position with its index, grid coordinate, and plate
+        column/row. The row label follows the snake scan: it is inverted on even
+        columns so that the (column, row) coordinates stay contiguous along the
+        path.
+
+        Returns:
+            list: List of (index, position, column, row) tuples.
+        """
         return [
             (idx, p, c, r)
             for idx, (p, (c, r)) in enumerate(
@@ -1332,8 +1387,9 @@ class EnderLeafController(object):
                     self._positions,
                     [
                         (
-                            # Since we use a snake pattern row index must be updated  when
-                            # column is an even number
+                            # In a snake scan each new row continues in the opposite
+                            # direction, so the row label is inverted on even columns
+                            # to keep the (column, row) coordinates contiguous.
                             chr(
                                 65 + (r if c % 2 == 1 else self.plate_row_count - 1 - r)
                             ),
@@ -1365,6 +1421,30 @@ class EnderLeafController(object):
         dst_folder: Path | None = None,
         z: float | None = None,
     ):
+        """Acquires the images of a single leaf disc under a lighting cycle
+
+        For each lighting configuration of the cycle the LED ring is set, an image
+        is captured, and a metadata row is built. When an experiment name is given
+        per-image file paths and a combined DataFrame are also returned; otherwise
+        only the raw images and metadata are returned.
+
+        Args:
+            light_cycle (list): Lighting cycle whose configurations are iterated.
+            center_on_leaf (bool, optional): If True, re-centers on the disc first.
+                Defaults to False.
+            exp_name (str | None, optional): Experiment name. When None, only raw
+                images/metadata are returned. Defaults to None.
+            inoc (str | None, optional): Inoculum identifier. Defaults to None.
+            plate (str | None, optional): Plate identifier. Defaults to None.
+            r (str | None, optional): Row label. Defaults to None.
+            c (int | None, optional): Column index. Defaults to None.
+            start_ts (str | None, optional): Job start timestamp. Defaults to None.
+            dst_folder (Path | None, optional): Folder for saved images. Defaults to None.
+            z (float | None, optional): Acquisition height. Defaults to None.
+
+        Returns:
+            tuple: (images, metadatas, file_paths, df).
+        """
         cycle_id = int(format_datetime())
         file_paths = []
         images = []
@@ -1431,7 +1511,7 @@ class EnderLeafController(object):
                 "crop_bottom": [self.crop_bottom],
                 "crop_left": [self.crop_left],
                 "crop_right": [self.crop_right],
-                "brightness": [self.top_lights.brightness],
+                "brightness": [self.led_ring.brightness],
             } | extract_metadata(metadata=metadata)
             metadatas.append(metadata)
             df = pd.concat([df, pd.DataFrame(metadata)])
@@ -1441,6 +1521,20 @@ class EnderLeafController(object):
     async def launch_acquisition(
         self, precise_focusing: bool = True, center_on_leaf: bool = False
     ):
+        """Runs the full acquisition job across the plate grid
+
+        Initializes the job, iterates every disc position, and for each disc runs
+        the configured lighting cycles, saving images and metadata and reporting
+        progress. Honors a stop request and restores the stage to rest when done.
+
+        Args:
+            precise_focusing (bool, optional): If True, runs a precise Z-scan. Defaults to True.
+            center_on_leaf (bool, optional): If True, re-centers on each disc. Defaults to False.
+
+        Returns:
+            bool: True on completion, False if the printer is not ready, the disk
+                is too full, or job initialization fails.
+        """
         if await self.printer_ready() is False:
             await self.socket_send_result(
                 level=LogLevel.ERROR, message=f"Please connect printer."
@@ -1560,6 +1654,14 @@ class EnderLeafController(object):
 
     # MARK: Tools
     async def check_discs_positions(self, precise_focusing: bool = False):
+        """Checks each disc position for a single detectable disc
+
+        Moves the camera over every position, classifies each as good (exactly one
+        disc detected) or bad, and updates the disc status plot.
+
+        Args:
+            precise_focusing (bool, optional): If True, runs a precise Z-scan. Defaults to False.
+        """
         if await self.printer_ready() is False:
             return
         await self.set_focus_close()
@@ -1592,6 +1694,21 @@ class EnderLeafController(object):
     async def visualize_noise(
         self, image_count: int = 10, kernel_size: int = 7, focus_method: str = FM_BREN
     ) -> np.ndarray:
+        """Captures frames and returns their focus-related noise comparison
+
+        Captures several frames (optionally median-blurred), scores each with the
+        given focus metric, and returns the least- and best-focused frames together
+        with the absolute difference between them.
+
+        Args:
+            image_count (int, optional): Number of frames to capture. Defaults to 10.
+            kernel_size (int, optional): Median-blur kernel size (1 disables it).
+                Defaults to 7.
+            focus_method (str, optional): Focus metric to use. Defaults to FM_BREN.
+
+        Returns:
+            np.ndarray: [min_focus_image, max_focus_image, abs_difference].
+        """
         images = [await self.capture_image() for _ in tqdm(range(image_count))]
         if kernel_size > 1:
             images = [cv2.medianBlur(image, ksize=kernel_size) for image in images]
@@ -1612,6 +1729,24 @@ class EnderLeafController(object):
         merge_mode=ImageMergeMode.MIN,
         center_on_leaf: bool = True,
     ):
+        """Runs a set of lighting cycles and returns their merged/cropped results
+
+        For each cycle the ring is set, a disc is acquired, and (on the first
+        cycle) a crop region is derived from the detected disc. Multi-config
+        cycles are merged with ``merge_mode``; single-config cycles are simply
+        cropped.
+
+        Args:
+            cycles (list, optional): Lighting cycles to run. Defaults to
+                [LightsCycle.ONE_FOURTH].
+            merge_mode (ImageMergeMode, optional): Aggregation mode for multi-config
+                cycles. Defaults to ImageMergeMode.MIN.
+            center_on_leaf (bool, optional): If True, re-centers on the first disc.
+                Defaults to True.
+
+        Returns:
+            list: One cropped or merged image per cycle.
+        """
         result = []
         for i, cycle in enumerate(cycles):
             await self.set_lights(cycle.value[0], wait=1)

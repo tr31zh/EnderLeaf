@@ -215,7 +215,7 @@ bt_check_corners = pn.widgets.Button(
     sizing_mode="stretch_width",
 )
 bt_lights_toggle = pn.widgets.Button(
-    name="TOP lights",
+    name="LED ring",
     icon="bulb",
     icon_size="2em",
     sizing_mode="stretch_width",
@@ -310,7 +310,7 @@ eis_lights_top_brightness = pn.widgets.EditableFloatSlider(
     start=0,
     end=1.0,
     step=0.05,
-    value=controller.top_lights.brightness,
+    value=controller.led_ring.brightness,
     sizing_mode="scale_width",
 )
 sel_lights_cycle = pn.widgets.MultiChoice(
@@ -438,7 +438,7 @@ async def on_check_disc_positions(event):
 
 
 async def on_toggle_lights(event):
-    if controller.top_lights.mean == 0:
+    if controller.led_ring.mean == 0:
         bt_lights_toggle.icon = "bulb"
         bt_lights_toggle.button_type = "success"
         await controller.shutter(True)
@@ -476,7 +476,7 @@ bt_check_discs.on_click(on_check_disc_positions)
 # MARK: Dependables
 @pn.depends(eis_lights_top_brightness.param.value, watch=True)
 def on_top_brightness_changed(brightness):
-    controller.top_lights.brightness = brightness
+    controller.led_ring.brightness = brightness
 
 
 @pn.depends(

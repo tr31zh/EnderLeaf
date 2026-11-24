@@ -32,12 +32,23 @@ class Rectangle:
 
     @classmethod
     def from_circle(cls, circle):
-        """Creates a Rectangle that bounds a given circle (cx, cy, r)"""
+        """Creates a Rectangle that bounds a given circle
+
+        Args:
+            circle (tuple): Circle as (cx, cy, r).
+
+        Returns:
+            Rectangle: Rectangle bounding the circle.
+        """
         cx, cy, r = circle
         return cls(cy - r, cy + r, cx - r, cx + r)
 
     def empty(self) -> bool:
-        """Checks if the rectangle is empty or invalid"""
+        """Checks if the rectangle is empty or invalid
+
+        Returns:
+            bool: True if the rectangle is empty or invalid.
+        """
         return (
             self.top is None
             or self.bottom is None
@@ -48,7 +59,15 @@ class Rectangle:
         )
 
     def shrink(self, new_width, new_height):
-        """Returns a new rectangle centered at the same position but with specified dimensions"""
+        """Returns a new rectangle centered at the same position but with specified dimensions
+
+        Args:
+            new_width (int): New width of the rectangle.
+            new_height (int): New height of the rectangle.
+
+        Returns:
+            Rectangle: New rectangle with the specified dimensions.
+        """
         return self.__class__(
             top=self.cy - new_height / 2,
             bottom=self.cy + new_height / 2,
@@ -57,7 +76,11 @@ class Rectangle:
         )
 
     def ensure_int(self):
-        """Returns a new rectangle with all coordinates rounded to the nearest integer"""
+        """Returns a new rectangle with all coordinates rounded to the nearest integer
+
+        Returns:
+            Rectangle: New rectangle with integer coordinates.
+        """
         return self.__class__(
             top=int(round(self.top)),
             bottom=int(round(self.bottom)),
@@ -66,7 +89,16 @@ class Rectangle:
         )
 
     def to_cv(self, image, color, thickness):
-        """Draws the rectangle on a copy of the provided image using OpenCV"""
+        """Draws the rectangle on a copy of the provided image using OpenCV
+
+        Args:
+            image (np.ndarray): Image to draw on.
+            color (tuple): Color of the rectangle.
+            thickness (int): Thickness of the rectangle border.
+
+        Returns:
+            np.ndarray: Image with the rectangle drawn.
+        """
         return cv2.rectangle(
             image.copy(),
             (self.left, self.top),
@@ -77,22 +109,38 @@ class Rectangle:
 
     @property
     def width(self):
-        """Returns the width of the rectangle"""
+        """Returns the width of the rectangle
+
+        Returns:
+            int: Width of the rectangle.
+        """
         return self.right - self.left
 
     @property
     def height(self):
-        """Returns the height of the rectangle"""
+        """Returns the height of the rectangle
+
+        Returns:
+            int: Height of the rectangle.
+        """
         return self.bottom - self.top
 
     @property
     def cx(self):
-        """Returns the x-coordinate of the rectangle's center"""
+        """Returns the x-coordinate of the rectangle's center
+
+        Returns:
+            float: X-coordinate of the rectangle's center.
+        """
         return self.left + self.width / 2
 
     @property
     def cy(self):
-        """Returns the y-coordinate of the rectangle's center"""
+        """Returns the y-coordinate of the rectangle's center
+
+        Returns:
+            float: Y-coordinate of the rectangle's center.
+        """
         return self.top + self.height / 2
 
 
@@ -226,11 +274,11 @@ def to_pil(image, size: tuple = None) -> Image:
     """Converts image from OpenCV (RGB) format to Pillow format
 
     Args:
-        image (nd.array): Source RGB image
+        image (np.ndarray): Source RGB image
         size (tuple, optional): Resize values. Defaults to None.
 
     Returns:
-        Image: Pillow image
+        PIL.Image: Pillow image
     """
     if image is None:
         return None
@@ -285,7 +333,16 @@ def crop_from_center(image, crop_data: Rectangle = Rectangle(400, 400, 400, 400)
 
 
 def safe_pil_resize(image: Image, new_width, new_height):
-    """Resizes a PIL image to fit within specified dimensions while maintaining aspect ratio"""
+    """Resizes a PIL image to fit within specified dimensions while maintaining aspect ratio
+
+    Args:
+        image (PIL.Image): Source image.
+        new_width (int): Target width.
+        new_height (int): Target height.
+
+    Returns:
+        PIL.Image: Resized image.
+    """
     return ImageOps.contain(image=image, size=(new_width, new_height))
 
 
@@ -471,7 +528,13 @@ def get_circles(
         image (np.ndarray): Source image
         color_space (str, optional): Color space to use. Defaults to "hsv".
         channel (str, optional): Channel to use. Defaults to "s".
-        ... (other args) ...
+        min_threshold (int, optional): Lower threshold for Canny. Defaults to 100.
+        max_threshold (int, optional): Upper threshold for Canny. Defaults to 200.
+        aperture (int, optional): Sobel operator aperture. Defaults to 3.
+        max_circles (int, optional): Maximum number of circles to detect. Defaults to 3.
+        resize_factor (int, optional): Downsample factor. Defaults to 4.
+        normalize (bool, optional): Whether to normalize the image. Defaults to True.
+        median_blur (int, optional): Median blur kernel size. Defaults to 7.
         radii_data (tuple, optional): (min_radius, max_radius, step). Defaults to (450, 550, 20).
 
     Returns:
@@ -532,8 +595,18 @@ def crop_best_circle(
     """Tries to detect circles and crop the image around the only accepted circle found
 
     Args:
-        ... (same as get_circles) ...
-    
+        image (np.ndarray): Source image
+        color_space (str, optional): Color space to use. Defaults to "hsv".
+        channel (str, optional): Channel to use. Defaults to "s".
+        min_threshold (int, optional): Lower threshold for Canny. Defaults to 100.
+        max_threshold (int, optional): Upper threshold for Canny. Defaults to 200.
+        aperture (int, optional): Sobel operator aperture. Defaults to 3.
+        max_circles (int, optional): Maximum number of circles to detect. Defaults to 3.
+        resize_factor (int, optional): Downsample factor. Defaults to 4.
+        normalize (bool, optional): Whether to normalize the image. Defaults to True.
+        median_blur (int, optional): Median blur kernel size. Defaults to 7.
+        radii_data (tuple, optional): (min_radius, max_radius, step). Defaults to (450, 550, 20).
+
     Returns:
         np.ndarray: Cropped image if exactly one circle is accepted, otherwise original image
     """
@@ -637,7 +710,11 @@ def find_rotation_anlge(
     """Estimates the rotation angle between two images using feature match alignment
 
     Args:
-        ... (same as find_matches) ...
+        previous_image (np.ndarray): First image
+        current_image (np.ndarray): Second image
+        previous_mask (np.ndarray, optional): Mask for first image. Defaults to None.
+        current_mask (np.ndarray, optional): Mask for second image. Defaults to None.
+        safe_ratio (float, optional): Ratio to filter matches by distance. Defaults to 0.5.
 
     Returns:
         float: Estimated rotation angle in degrees
@@ -676,7 +753,11 @@ def match_previous_rotation(
     """Aligns the current image rotation to match the previous image's orientation
 
     Args:
-        ... (same as find_rotation_anlge) ...
+        previous_image (np.ndarray): First image
+        current_image (np.ndarray): Second image
+        previous_mask (np.ndarray, optional): Mask for first image. Defaults to None.
+        current_mask (np.ndarray, optional): Mask for second image. Defaults to None.
+        safe_ratio (float, optional): Ratio to filter matches by distance. Defaults to 0.5.
 
     Returns:
         np.ndarray: Rotated current image aligned to previous image

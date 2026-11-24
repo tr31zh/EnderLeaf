@@ -324,7 +324,7 @@ async def node_toggle_lights(websocket, **kwargs):
         **kwargs: Unused arguments
     """
     controller.socket = websocket
-    new_state = controller.top_lights.mean == 0
+    new_state = controller.led_ring.mean == 0
     await websocket.send(
         SocketMessage(
             type=MsgType.MESSAGE,
