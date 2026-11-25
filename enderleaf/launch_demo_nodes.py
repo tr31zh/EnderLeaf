@@ -7,7 +7,12 @@ PORTS = [i + 8760 for i in range(NUM_NODES)]
 
 NODES = [f"ws://localhost:{p}" for p in PORTS]
 
-def start_test_nodes():
+def start_test_nodes() -> list:
+    """Launch the local test nodes as background subprocesses
+
+    Returns:
+        list: The list of launched subprocess handles.
+    """
     processes = []
     for port in PORTS:
         p = subprocess.Popen([sys.executable, "ws_node.py", str(port)])
@@ -15,7 +20,8 @@ def start_test_nodes():
     return processes
 
 
-def main():
+def main() -> None:
+    """Start the local test nodes and wait until the first one exits"""
     print(f"Setting up {NUM_NODES} local test clients...")
     nodes = start_test_nodes()
     nodes[0].wait()

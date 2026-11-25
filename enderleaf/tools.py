@@ -40,6 +40,11 @@ def time_method(f):
     """
 
     def new_function(*args, **kwargs):
+        """Time the decorated call and print its elapsed time
+
+        Returns:
+            Any: The decorated function's return value, unchanged.
+        """
         before = timer()
         x = f(*args, **kwargs)
         after = timer()

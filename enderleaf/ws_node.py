@@ -19,7 +19,13 @@ controller = EnderLeafController()
 
 
 def sigint_handler(sig, frame):
-    """Handles SIGINT signal to ensure graceful shutdown of the controller"""
+    """Handles SIGINT signal to ensure graceful shutdown of the controller
+
+    Args:
+        sig (int): The signal number that triggered the handler.
+        frame (frame | None): The current stack frame, or None when raised by
+            ``signal.raise_signal``.
+    """
     print("")
     print("Stopping node")
     controller.close()

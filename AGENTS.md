@@ -162,6 +162,13 @@ python serve_enderleaf.py
 
 ## Conventions for agents
 
+- **Docstrings follow the Google convention**: every function and method docstring uses the
+  Google style — a one-line imperative summary, then an optional extended description, followed
+  by `Args:`, `Returns:`, and (where relevant) `Raises:`/`Attributes:`/`Yields:` sections
+  (`name (type): description`, with optional params marked `optional`). Add an extended
+  description paragraph only when the one-line summary is not enough to explain the behavior;
+  otherwise omit it. Model the basic shape on `find_circles` in `enderleaf/image.py` and the
+  extended-description case on the `MemoryFilter` class in `enderleaf/ws_ui.py`.
 - **Edit the fork, not the base**: put new/changed behavior in `enderleaf/`; keep `enderscope/`
   changes minimal and only when strictly necessary.
 - **Prefer simulation for dev**: validate logic off-Pi using `dummy_camera`; never require real

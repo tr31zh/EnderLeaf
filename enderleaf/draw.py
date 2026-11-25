@@ -50,6 +50,7 @@ def image_grid(
         Figure: Matplotlib figure with images
     """
     col_count = row_count if col_count is None else col_count
+    # Square grid when only a row count is given
     fig = Figure(
         figsize=(
             figsize
@@ -85,10 +86,13 @@ def draw_circles(image, circles, thickness=12):
         np.ndarray: Image with circles drawn
     """
     out = image.copy()
+    # Accepted discs: solid black ring at full thickness
     for _, cx, cy, r in circles["accepted"]:
         out = cv2.circle(out, (cx, cy), r, (0, 0, 0), thickness=thickness)
+    # Discarded for position: red ring at half thickness
     for _, cx, cy, r in circles["discarded_position"]:
         out = cv2.circle(out, (cx, cy), r, (255, 0, 0), thickness=thickness // 2)
+    # Discarded for accuracy: magenta ring at half thickness
     for accu, cx, cy, r in circles["discarded_accu"]:
         _ = cv2.circle(out, (cx, cy), r, (255, 0, 255), thickness=thickness // 2)
     return out
@@ -113,6 +117,7 @@ def resize_with_padding(
     Returns:
         np.ndarray: Resized and padded image
     """
+    # Resize down to max_size, then pad up to the target (or max_size) in each axis
     return A.Compose(
         [
             A.LongestMaxSize(max_size=max_size, p=1, interpolation=interpolation),
@@ -142,6 +147,7 @@ def hconcat_resize_min(
     h_min = min(im.shape[0] for im in im_list) if height is None else height
     im_list_resize = [
         resize_with_padding(
+            # Grayscale images are tripled to 3 channels so hconcat aligns them
             image=im if len(im.shape) == 3 else cv2.merge([im, im, im]),
             max_size=h_min,
             out_width=int(im.shape[1] * h_min / im.shape[0]),
@@ -169,6 +175,7 @@ def vconcat_resize_min(
     w_min = min(im.shape[1] for im in im_list) if width is None else width
     im_list_resize = [
         resize_with_padding(
+            # Grayscale images are tripled to 3 channels so vconcat aligns them
             image=im if len(im.shape) == 3 else cv2.merge([im, im, im]),
             max_size=w_min,
             out_width=w_min,
@@ -293,6 +300,7 @@ def plot_images_with_histograms(
                     histr, color=np.array(color_value) / 255, label=color_label
                 )
             ax_hist.set_axis_off()
+            # Show the color-channel legend only once, on the first image column
             if idx == 0:
                 ax_hist.legend()
 

@@ -264,7 +264,11 @@ class EnderLeafController(object):
             return True
 
     async def socketsend_message(self, message):
-        """Sends a text message to the connected socket and through the message callback"""
+        """Sends a text message to the connected socket and through the message callback
+
+        Args:
+            message (str): The text message to send.
+        """
         if self.socket is not None:
             await self.socket.send(
                 SocketMessage(type=MsgType.MESSAGE, message=message).dump()
@@ -273,7 +277,12 @@ class EnderLeafController(object):
             await self.on_send_message(message)
 
     async def socket_send_image(self, image):
-        """Resizes and encodes an image to base64 before sending to the socket sends the original image to the callback callback"""
+        """Resizes and encodes an image to base64 for the socket, and sends the
+        original image to the callback
+
+        Args:
+            image (np.ndarray): The image to send.
+        """
         if self.socket is not None:
             await self.socket.send(
                 SocketMessage(
@@ -289,7 +298,12 @@ class EnderLeafController(object):
             await self.on_send_image(image)
 
     async def socket_send_problem(self, level: LogLevel, message: str):
-        """Sends an error or warning message to the socket and callback"""
+        """Sends an error or warning message to the socket and callback
+
+        Args:
+            level (LogLevel): Severity level of the problem.
+            message (str): The problem message to send.
+        """
         if self.socket is not None:
             await self.socket.send(
                 SocketMessage(type=MsgType.PROBLEM, message=message, level=level).dump()
@@ -298,7 +312,12 @@ class EnderLeafController(object):
             await self.on_send_problem(level, message)
 
     async def socket_send_progress(self, step, total):
-        """Sends current progress (step, total) to the socket and callback"""
+        """Sends current progress (step, total) to the socket and callback
+
+        Args:
+            step (int): The current step index.
+            total (int): The total number of steps.
+        """
         if self.socket is not None:
             await self.socket.send(
                 SocketMessage(type=MsgType.PROGRESS, step=step, total=total).dump()
@@ -307,7 +326,13 @@ class EnderLeafController(object):
             await self.on_send_progress(step, total)
 
     async def socket_send_position_plot(self, index: int | list | None = None):
-        """Generates and sends a path status or disc status plot to the socket and callback"""
+        """Generates and sends a path status or disc status plot to the socket and
+        callback
+
+        Args:
+            index (int | list | None, optional): Disc indexes to highlight.
+                Defaults to None.
+        """
         if len(self._positions) == 0:
             fig = plot_path_status(z=await self.get_z())
         elif len(self._good_discs) > 0 or len(self._bad_discs) > 0:
@@ -337,7 +362,11 @@ class EnderLeafController(object):
             await self.on_send_position_plot(fig)
 
     async def send_focus_plot(self, df_scores: pd.DataFrame):
-        """Sends a focus metric plot to the socket and callback"""
+        """Sends a focus metric plot to the socket and callback
+
+        Args:
+            df_scores (pd.DataFrame): Focus metric scores used to build the plot.
+        """
         fig = plot_focus_plt(df=df_scores)
         if self.socket is not None:
             await self.socket.send(
@@ -372,7 +401,12 @@ class EnderLeafController(object):
             await self.on_send_config(self.to_json())
 
     async def socket_send_result(self, level: LogLevel, message: str):
-        """Sends an operation result message to the socket and callback"""
+        """Sends an operation result message to the socket and callback
+
+        Args:
+            level (LogLevel): Severity level of the result.
+            message (str): The result message to send.
+        """
         if self.socket is not None:
             await self.socket.send(
                 SocketMessage(type=MsgType.RESULT, message=message, level=level).dump()
@@ -381,7 +415,13 @@ class EnderLeafController(object):
             await self.on_send_result(level, message)
 
     async def socket_send_position(self, x, y, z: float):
-        """Sends the current XYZ position to the socket and callback"""
+        """Sends the current XYZ position to the socket and callback
+
+        Args:
+            x (float): X coordinate.
+            y (float): Y coordinate.
+            z (float): Z coordinate.
+        """
         if self.socket is not None:
             await self.socket.send(
                 SocketMessage(type=MsgType.POSITION_DATA, x=x, y=y, z=z).dump()
@@ -446,7 +486,12 @@ class EnderLeafController(object):
         self.led_ring.brightness = 1.0
 
     def log(self, kind, message: str):
-        """Logs a message using the specified LogLevel"""
+        """Logs a message using the specified LogLevel
+
+        Args:
+            kind (LogLevel): The log level to use.
+            message (str): The message to log.
+        """
         indent = ""
         match kind:
             case LogLevel.INFO:
@@ -482,7 +527,11 @@ class EnderLeafController(object):
         }
 
     def from_json(self, data: dict) -> None:
-        """Updates controller configuration from a dictionary"""
+        """Updates controller configuration from a dictionary
+
+        Args:
+            data (dict): Configuration key-value pairs to apply.
+        """
         for k, v in data.items():
             if k != "lights_conf":
                 try:
@@ -577,7 +626,16 @@ class EnderLeafController(object):
         focus_start_z,
         focus_delta_z,
     ):
-        """Configures the plate layout and initial focus acquisition settings"""
+        """Configures the plate layout and initial focus acquisition settings
+
+        Args:
+            plate_x (int): Plate X size in mm.
+            plate_y (int): Plate Y size in mm.
+            plate_row_count (int): Number of plate rows.
+            plate_col_count (int): Number of plate columns.
+            focus_start_z (int): Starting Z height for focus acquisition.
+            focus_delta_z (int): Z step size for the focus scan.
+        """
         self.plate_x = plate_x
         self.plate_y = plate_y
         self.plate_row_count = plate_row_count
@@ -586,7 +644,11 @@ class EnderLeafController(object):
         self.focus_delta_z = focus_delta_z
 
     def set_controls(self, control_data: dict):
-        """Applies specified camera controls to the Picamera2 instance"""
+        """Applies specified camera controls to the Picamera2 instance
+
+        Args:
+            control_data (dict): Camera control key-value pairs to apply.
+        """
         self.camera.set_controls(control_data)
 
     async def set_exposure(self, wait=1):
@@ -805,7 +867,11 @@ class EnderLeafController(object):
             self._camera_state = CameraState.IDLE
 
     async def switch_state(self, new_mode: CameraState):
-        """Changes the camera's operational state (e.g. IDLE, STILL, SIMULATION)"""
+        """Changes the camera's operational state (e.g. IDLE, STILL, SIMULATION)
+
+        Args:
+            new_mode (CameraState): The target camera state.
+        """
         if (
             new_mode == self._camera_state
             or self._camera_state == CameraState.SIMULATION

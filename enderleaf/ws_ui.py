@@ -14,8 +14,6 @@ from dataclasses import dataclass
 import json
 import socket
 import paramiko
-import platform
-import traceback
 
 import numpy as np
 from PIL import Image
@@ -58,7 +56,7 @@ from enderleaf.tools import (
 # Load the node addresses from the shared configuration file. When the file is
 # missing or unreadable, fall back to an empty mapping so the local fallback
 # branch below can take over.
-# The json also contains the address of the main node which will receive images from all the other nodes
+# The json also contains the a flag to indicate if the UI is running on the main node
 try:
     with open(
         str(Path(".").joinpath("addons").joinpath("conf").joinpath("addresses.json")),
@@ -74,15 +72,14 @@ if LOCAL_CLIENTS is True or not addresses:
     # Local/development mode: spawn a fixed number of nodes on sequential
     # localhost ports and treat this client as the main (coordinating) node.
     NUM_NODES = 4
-    PORTS = [i + 8760 for i in range(NUM_NODES)]
-    NODES = [f"ws://localhost:{p}" for p in PORTS]
+    NODES = [f"ws://localhost:{p}" for p in [i + 8760 for i in range(NUM_NODES)]]
     MAIN_NODE = True
 else:
-    # Distributed mode: resolve the host's own IP address and compare it with the
-    # configured main node IP to decide whether this client is the main node.
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.connect(("1.2.3.4", 1))
-    NODES = [f"ws://{ip}:8765" for ip in addresses["nodes"]]
+    # If addresses is empty try to reach own node
+    NODES = [
+        f"ws://{ip}:8765"
+        for ip in addresses.get("nodes", [socket.gethostbyname(socket.gethostname())])
+    ]
     MAIN_NODE = addresses.get("main_node", False)
 
 # MARK: UI configuration constants
@@ -109,7 +106,7 @@ class MemoryFilter(logging.Filter):
     A class-level attribute tracks the previous memory percentage so that each
     record can carry a trend indicator relative to the last logged record.
 
-    Attributes:
+    Args:
         last_process_mem (float): Memory percentage captured for the previous
             record. Used to compute the up/down/flat trend arrow.
     """
@@ -117,6 +114,14 @@ class MemoryFilter(logging.Filter):
     last_process_mem = 0
 
     def filter(self, record):
+        """Annotate the log record with the process memory usage and its trend
+
+        Args:
+            record (logging.LogRecord): The record to enrich with memory data.
+
+        Returns:
+            bool: Always True, keeping every record.
+        """
         process: psutil.Process = psutil.Process(os.getpid())
         pmp = process.memory_percent()
         # Determine the memory trend relative to the previously recorded sample.
@@ -371,6 +376,12 @@ class NodeUi:
     """
 
     def __init__(self, node_address: str, id_color):
+        """Initializes the node UI controls for a single EnderLeaf node
+
+        Args:
+            node_address (str): WebSocket address of the node.
+            id_color: Color that uniquely identifies this node.
+        """
         self.node_address = node_address
         self.ip = node_address.replace("ws://", "").split(":")[0]
         self.id_color = id_color
@@ -636,7 +647,7 @@ class NodeUi:
                 )
             )
 
-# MARK: File transfer
+    # MARK: File transfer
     def handle_file(
         self, sftp: paramiko.sftp_client.SFTPClient, src_file: Path
     ) -> bool:
@@ -1280,7 +1291,11 @@ async def on_run_task(e: ft.Event[ft.Button]):
 
 
 def on_capture_array(e):
-    """Placeholder handler for capturing the image array (no-op)."""
+    """Placeholder handler for capturing the image array (no-op)
+
+    Args:
+        e (ft.Event): The trigger event (unused).
+    """
     pass
 
 
@@ -1549,6 +1564,15 @@ def fullscren_page(route) -> ft.View:
 
 
 def confirm_exit_dialog(dialog_text: str, actions: list):
+    """Builds a non-modal confirmation dialog for the window-close prompts
+
+    Args:
+        dialog_text (str): Message shown to the user requesting confirmation.
+        actions (list): List of action buttons to place in the dialog.
+
+    Returns:
+        ft.AlertDialog: The configured confirmation dialog.
+    """
     return ft.AlertDialog(
         modal=False,
         title=ft.Text("Please confirm"),
@@ -1559,6 +1583,7 @@ def confirm_exit_dialog(dialog_text: str, actions: list):
 
 
 async def stop_for_transfer_tasks():
+    """Requests every node to stop its file transfer and waits for them to finish"""
     for nu in node_uis.values():
         nu.ft_status = FileTransferStatus.STOP_REQUESTED
     while True:
@@ -1619,6 +1644,12 @@ async def main(page: ft.Page):
     page.update()
 
     async def go_fullscreen(e: ft.Event[ft.IconButton]):
+        """Navigate to the fullscreen route for the node that owns the button
+
+        Args:
+            e (ft.Event[ft.IconButton]): Click event; the button's node selects
+                the route.
+        """
         # Navigate to the fullscreen route for the node that owns the button.
         # log(level=LogLevel.DEBUG, message=str(e.control.node_address))
         await page.push_route(f"/{e.control.node_address}")
@@ -1628,10 +1659,13 @@ async def main(page: ft.Page):
         nu.expand_toggle.on_click = go_fullscreen
 
     def route_change():
+        """Rebuild the page views from the current route
+
+        Always starts from the global view, then layers a fullscreen view on top
+        when the route names a node, adjusting the theme accent accordingly.
+        """
         # log(level=LogLevel.DEBUG, message=f"Route changed -> {page.route}")
         page.views.clear()
-        # Always start from the global view, then layer a fullscreen view on top
-        # when the route names a node, adjusting the theme accent accordingly.
         page.views.append(global_page())
         if len(page.route) > 1:
             page.views.append(fullscren_page(page.route))
@@ -1646,6 +1680,11 @@ async def main(page: ft.Page):
         page.update()
 
     async def view_pop(e):
+        """Remove the popped view and re-route to the new top view
+
+        Args:
+            e (ft.Event[ft.ViewPop]): The view pop event.
+        """
         # When a view is popped, remove it and re-route to the new top view.
         if e.view is not None:
             # log(level=LogLevel.DEBUG, message=f"View pop: {e.view}")
@@ -1666,18 +1705,38 @@ async def main(page: ft.Page):
         if desktop_client is True:
 
             async def handle_confirm_close_click(e: ft.Event[ft.Button]):
+                """Stop all transfers and destroy the window on confirmation
+
+                Args:
+                    e (ft.Event[ft.Button]): Click event on the "Yes" button.
+                """
                 await stop_for_transfer_tasks()
                 await page.window.destroy()
 
             def handle_no_wip_click(e: ft.Event[ft.OutlinedButton]):
+                """Dismiss the in-progress confirmation dialog on the "No" button
+
+                Args:
+                    e (ft.Event[ft.OutlinedButton]): Click event on the "No" button.
+                """
                 page.pop_dialog()
 
             def handle_no_tip_click(e: ft.Event[ft.OutlinedButton]):
+                """Resume all transfers and dismiss the transfer confirmation dialog
+
+                Args:
+                    e (ft.Event[ft.OutlinedButton]): Click event on the "No" button.
+                """
                 for nu in node_uis.values():
                     nu.ft_status = FileTransferStatus.ACTIVE
                 page.pop_dialog()
 
             async def window_event(e: ft.WindowEvent):
+                """Handle window close requests, confirming when work is in progress
+
+                Args:
+                    e (ft.WindowEvent): The window event (close request).
+                """
                 if e.type == ft.WindowEventType.CLOSE:
                     # Check if job in progress
                     if spin_working.visible:
@@ -1727,6 +1786,11 @@ async def main(page: ft.Page):
         else:
 
             async def on_disconnect(e):
+                """On app shutdown, stop all transfers and wait for them to finish
+
+                Args:
+                    e (ft.Event[ft.AppDisconnect]): The app disconnect event.
+                """
                 # On app shutdown, stop all transfers and wait for them to finish.
                 print("Entering disconnect")
                 await stop_for_transfer_tasks()

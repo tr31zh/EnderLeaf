@@ -223,9 +223,25 @@ def VOLA(image):
 
 
 def FFTE(image):
-    """FFT Energy"""
+    """FFT energy focus measure
+
+    Args:
+        image (np.ndarray): Source image.
+
+    Returns:
+        float: The focus measure value.
+    """
     return np.abs(np.fft.fft2(image)).var()
 
 
-def compute_focus_metric(image, method: str):
+def compute_focus_metric(image, method: str) -> float:
+    """Compute the focus measure of an image using the named method
+
+    Args:
+        image (np.ndarray): Source image.
+        method (str): Name of the focus-metric function defined in this module.
+
+    Returns:
+        float: The focus measure value for the requested method.
+    """
     return globals()[method](image)

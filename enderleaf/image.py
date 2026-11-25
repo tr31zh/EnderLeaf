@@ -25,7 +25,12 @@ class Rectangle:
     left: int | None = None
     right: int | None = None
 
-    def __repr__(self):
+    def __repr__(self) -> str:
+        """Return a compact string representation of the rectangle
+
+        Returns:
+            str: The rectangle as "left:<left>|right:<right>|top:<top>|bottom:<bottom>".
+        """
         return (
             f"left:{self.left}|right:{self.right}|top:{self.top}|bottom:{self.bottom}"
         )

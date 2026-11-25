@@ -58,6 +58,10 @@ class CardPoint(Enum):
     WEST = "WEST"
 
 
+# Each entry is one lighting configuration: the list of CardPoint quarters of
+# the LED ring to illuminate. The order is OFF, FULL, then the single-quadrant
+# (one-fourth), two-quadrant (two-fourths), and three-quadrant (three-fourths)
+# configurations that LightsCycle groups below.
 LIGHTS_CONF = [
     [],
     [CardPoint.EAST, CardPoint.NORTH, CardPoint.WEST, CardPoint.SOUTH],
@@ -110,7 +114,14 @@ class LogLevel(str, Enum):
 
     @staticmethod
     def log_level_to_int(log_level) -> int:
-        """Convert a LogLevel enum to its corresponding integer value"""
+        """Convert a LogLevel enum to its corresponding integer value
+
+        Args:
+            log_level (LogLevel): The log level to convert.
+
+        Returns:
+            int: The integer value for the log level.
+        """
         match log_level:
             case LogLevel.DEBUG:
                 return 10
@@ -129,7 +140,14 @@ class LogLevel(str, Enum):
 
     @staticmethod
     def int_to_log_level(value: int):
-        """Convert an integer value back to its corresponding LogLevel enum"""
+        """Convert an integer value back to its corresponding LogLevel enum
+
+        Args:
+            value (int): The integer log-level value to convert.
+
+        Returns:
+            LogLevel: The matching log level.
+        """
         match value:
             case 10:
                 return LogLevel.DEBUG

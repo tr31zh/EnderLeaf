@@ -7,10 +7,6 @@ from pathlib import Path
 from functools import wraps
 from datetime import datetime as dt
 
-try:
-    from libcamera import controls
-except:
-    pass
 
 import panel as pn
 
@@ -31,12 +27,30 @@ crd_log = pn.layout.Card(mkd_log, title="Log", collapsed=True)
 
 
 class PanelLogHandler(logging.Handler):
+    """Custom logging handler that mirrors the last log records into a Panel markdown pane
+
+    Attributes:
+        target (pn.pane.Markdown): Markdown pane where the log messages are displayed.
+        _logs (list): Buffer holding the most recent formatted log messages.
+    """
+
     def __init__(self, target, card):
+        """Initialize the handler with the markdown target and its card
+
+        Args:
+            target (pn.pane.Markdown): Markdown pane updated with the log messages.
+            card (pn.layout.Card): Card whose title reflects the latest log message.
+        """
         super().__init__()
         self.target = target
         self._logs = []
 
     def emit(self, record):
+        """Emit a log record by refreshing the markdown pane and card title
+
+        Args:
+            record (logging.LogRecord): The log record to format and display.
+        """
         msg = self.format(record)
         self._logs.insert(0, msg)
         if len(self._logs) > 10:
@@ -46,10 +60,23 @@ class PanelLogHandler(logging.Handler):
 
 
 class MemoryFilter(logging.Filter):
+    """Logging filter that enriches each record with the current process memory usage
+
+    Attributes:
+        last_process_mem (float): Process memory percentage recorded on the previous call.
+    """
 
     last_process_mem = 0
 
     def filter(self, record):
+        """Attach the process memory usage and its trend to the log record
+
+        Args:
+            record (logging.LogRecord): The log record to enrich with memory data.
+
+        Returns:
+            bool: Always True, keeping every record.
+        """
         process: psutil.Process = psutil.Process(os.getpid())
         pmp = process.memory_percent()
         sign = (
@@ -94,8 +121,25 @@ _working = False
 
 
 def working(method):
+    """Decorator that guards a method against concurrent re-entrancy
+
+    While a guarded call is in progress, further calls return immediately without
+    re-entering the method.
+
+    Args:
+        method (callable): The method to guard.
+
+    Returns:
+        callable: The guarded wrapper.
+    """
     @wraps(method)
     def _impl(*method_args, **method_kwargs):
+        """Guarded implementation that runs the method unless already in progress
+
+        Returns:
+            Any: The method's return value when executed, or None when a call was
+                skipped because the method is already running.
+        """
         global _working
         if _working is True:
             return
@@ -129,23 +173,49 @@ pg_progress = pn.indicators.Progress(value=0, sizing_mode="stretch_width")
 
 
 async def on_update_still(image):
+    """Update the still image pane with a freshly captured image
+
+    Args:
+        image (np.ndarray): Source image to display.
+    """
     still_pane.object = safe_pil_resize(to_pil(image), new_width=1024, new_height=768)
 
 
 async def on_message_received(message):
+    """Append a received message to the log markdown pane
+
+    Args:
+        message (str): The message text to append.
+    """
     mkd_log.object += "- " +  message + "\n\n"
 
 
 async def on_update_position_plot(new_plot):
+    """Update the position plot pane with a new figure
+
+    Args:
+        new_plot (matplotlib.figure.Figure): Figure to display.
+    """
     plt_position.object = new_plot
 
 
 async def on_update_focus_plot(fig):
+    """Update the focus plot pane with a new figure
+
+    Args:
+        fig (matplotlib.figure.Figure): Figure to display.
+    """
     plt_focus.object = fig
 
 
 def post_callback(request):
+    """Update the camera configuration pane with the request metadata
+
+    Args:
+        request (Any): Camera request exposing ``get_metadata()``.
+    """
     global _working
+    # Guard against re-entrant camera requests (mirrors the `working` decorator)
     if _working is True:
         return
     _working = True
@@ -158,6 +228,12 @@ def post_callback(request):
 
 
 def on_progress_updated(current, total):
+    """Update the progress indicator as a job advances
+
+    Args:
+        current (int): Index of the current step.
+        total (int): Total number of steps.
+    """
     if pg_progress.max != total:
         pg_progress.max = total
     pg_progress.value = current + 1
@@ -167,6 +243,8 @@ def on_progress_updated(current, total):
 controller = EnderLeafController()
 
 # MARK: Widgets
+
+# Camera configuration display
 json_camera_controls = pn.widgets.JSONEditor(
     value=dict(sorted(controller.camera.camera_controls.items())),
     name="Camera controls",
@@ -174,10 +252,12 @@ json_camera_controls = pn.widgets.JSONEditor(
     sizing_mode="stretch_width",
 )
 
+# Focus
 bt_focus = pn.widgets.Button(name="Focus", sizing_mode="stretch_width")
 bt_focus_close = pn.widgets.Button(name="Focus close", sizing_mode="stretch_width")
 bt_focus_far = pn.widgets.Button(name="Focus far", sizing_mode="stretch_width")
 
+# Printer control
 sel_printer = pn.widgets.Select(
     name="Select serial connection",
     options=[str(p) for p in list_ports()],
@@ -208,13 +288,14 @@ bt_qr_code = pn.widgets.Button(
     icon_size="2em",
     sizing_mode="stretch_width",
 )
-bt_check_corners = pn.widgets.Button(
+bt_check_corners = pn.widgets.Button(  # verify the plate corners are reachable
     name="Check corners",
     icon="border-corners",
     icon_size="2em",
     sizing_mode="stretch_width",
 )
 bt_lights_toggle = pn.widgets.Button(
+    # Toggles the LED ring on/off; icon and color reflect the current state
     name="LED ring",
     icon="bulb",
     icon_size="2em",
@@ -229,6 +310,7 @@ bt_lights_cycle = pn.widgets.Button(
     button_type="default",
 )
 ii_crop_top = pn.widgets.IntInput(
+    # Crop margins (px) applied to each acquired image; initialized from the controller
     name="Top",
     align="center",
     sizing_mode="stretch_width",
@@ -257,6 +339,7 @@ sel_crop_mode = pn.widgets.Select(
     sizing_mode="stretch_width",
 )
 ii_plate_x = pn.widgets.IntInput(
+    # Plate grid (mm) and disc grid layout; initialized from the controller
     name="Plate X size",
     align="center",
     sizing_mode="stretch_width",
@@ -287,12 +370,14 @@ ii_focus_delta_z = pn.widgets.IntInput(
     name="Focus ΔZ", sizing_mode="stretch_width", value=controller.focus_delta_z
 )
 bt_launch_acquisition = pn.widgets.Button(
+    # Launch / stop the multi-disc acquisition job
     name="Launch job", icon="player-play", icon_size="2em"
 )
 bt_stop_acquisition = pn.widgets.Button(
     name="Stop", icon="circle-dashed-x", icon_size="2em", button_type="danger"
 )
 cbg_launch_options = pn.widgets.CheckBoxGroup(
+    # Job launch options, forwarded to launch/check routines
     name="Launch options",
     options=[LO_PRECISE_FOCUS, LO_SWITCH_STATE, LO_CENTER_OL],
     value=[LO_PRECISE_FOCUS, LO_SWITCH_STATE, LO_CENTER_OL],
@@ -306,6 +391,7 @@ bt_check_discs = pn.widgets.Button(
     button_type="warning",
 )
 eis_lights_top_brightness = pn.widgets.EditableFloatSlider(
+    # LED ring brightness, synced back to the controller on change
     name="Brightness",
     start=0,
     end=1.0,
@@ -314,8 +400,8 @@ eis_lights_top_brightness = pn.widgets.EditableFloatSlider(
     sizing_mode="scale_width",
 )
 sel_lights_cycle = pn.widgets.MultiChoice(
+    # Lighting configurations applied per disc during acquisition
     name="Acquisition lights cycle",
-    # label="Acquisition lights cycle",
     options={
         lc.name: lc
         for lc in [
@@ -377,36 +463,76 @@ crd_move = pn.Column(
 # MARK: Events
 @working
 def on_request_focus(event):
+    """Trigger the autofocus cycle when the Focus button is clicked
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
     controller.autofocus_cycle()
 
 
 @working
 def on_request_focus_close(event):
+    """Move the camera focus close when the Focus close button is clicked
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
     controller.set_focus_close()
 
 
 @working
 def on_request_focus_far(event):
+    """Move the camera focus far when the Focus far button is clicked
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
     controller.set_focus_far()
 
 
 async def on_connect_printer(event):
+    """Connect to the printer using the selected serial port
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
     await controller.connect_printer(sel_printer.value)
 
 
 async def on_home(event):
+    """Home the stage when the Home button is clicked
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
     await controller.go_home()
 
 
 async def on_idle(event):
+    """Move the stage to its rest position when the Wait button is clicked
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
     await controller.go_rest()
 
 
 async def on_park(event):
+    """Move the stage to its park position when the Park button is clicked
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
     await controller.go_park()
 
 
 async def on_center_on_qr_code(event):
+    """Center the camera on the QR code using the selected launch options
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
     await controller.center_on_qr_code(
         precise_focusing=LO_PRECISE_FOCUS in cbg_launch_options.value,
         switch_state=LO_SWITCH_STATE in cbg_launch_options.value,
@@ -414,10 +540,20 @@ async def on_center_on_qr_code(event):
 
 
 async def on_check_corners(event):
+    """Check the plate corners when the Check corners button is clicked
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
     await controller.check_corners()
 
 
 async def on_launch_acquisition(event):
+    """Launch the acquisition job using the selected launch options
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
     await controller.launch_acquisition(
         precise_focusing=LO_PRECISE_FOCUS in cbg_launch_options.value,
         switch_state=LO_SWITCH_STATE in cbg_launch_options.value,
@@ -426,11 +562,22 @@ async def on_launch_acquisition(event):
 
 
 async def on_cancel_request(event):
+    """Request a stop of the in-progress job when the Stop button is clicked
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
+    # Signal the controller to stop by flipping its status; the job loop checks it
     if controller.status == ELStatus.JOB_IN_PROGRESS:
         controller.status = ELStatus.STOP_REQUESTED
 
 
 async def on_check_disc_positions(event):
+    """Check the disc positions using the selected launch options
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
     await controller.check_discs_positions(
         precise_focusing=LO_PRECISE_FOCUS in cbg_launch_options.value,
         switch_state=LO_SWITCH_STATE in cbg_launch_options.value,
@@ -438,6 +585,12 @@ async def on_check_disc_positions(event):
 
 
 async def on_toggle_lights(event):
+    """Toggle the LED ring on or off, updating the button appearance
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
+    # Only toggle the shutter; the button icon/type mirror the resulting ring state
     if controller.led_ring.mean == 0:
         bt_lights_toggle.icon = "bulb"
         bt_lights_toggle.button_type = "success"
@@ -449,14 +602,25 @@ async def on_toggle_lights(event):
 
 
 async def on_cycle_lights(event):
+    """Cycle to the next lighting pattern when the Cycle lights button is clicked
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
     await controller.cycle_lights()
 
 
 async def on_move_to(event):
+    """Move the stage to the selected position when the Move to button is clicked
+
+    Args:
+        event (Any): The click event passed by the button.
+    """
     await controller.move_to(sel_position.value)
 
 
 # MARK: Binds
+# Wire each button to its handler
 bt_focus.on_click(on_request_focus)
 bt_focus_close.on_click(on_request_focus_close)
 bt_focus_far.on_click(on_request_focus_far)
@@ -476,6 +640,11 @@ bt_check_discs.on_click(on_check_disc_positions)
 # MARK: Dependables
 @pn.depends(eis_lights_top_brightness.param.value, watch=True)
 def on_top_brightness_changed(brightness):
+    """Update the LED ring brightness when the brightness slider changes
+
+    Args:
+        brightness (float): The new LED ring brightness.
+    """
     controller.led_ring.brightness = brightness
 
 
@@ -493,6 +662,15 @@ def on_top_brightness_changed(brightness):
     watch=True,
 )
 def on_crop_changed(cl, cr, ct, cb, cm):
+    """Update the controller crop settings when any crop widget changes
+
+    Args:
+        cl (int): Left crop margin.
+        cr (int): Right crop margin.
+        ct (int): Top crop margin.
+        cb (int): Bottom crop margin.
+        cm (CropMode): The selected crop mode.
+    """
     controller.set_crop(
         left=cl,
         right=cr,
@@ -517,16 +695,36 @@ def on_crop_changed(cl, cr, ct, cb, cm):
     watch=True,
 )
 def on_plate_properties_changed(x, y, rc, cc, fs, fd):
+    """Update the controller plate settings when any plate widget changes
+
+    Args:
+        x (int): Plate X size.
+        y (int): Plate Y size.
+        rc (int): Plate row count.
+        cc (int): Plate column count.
+        fs (int): Focus start Z.
+        fd (int): Focus delta Z.
+    """
     controller.set_plate(x, y, rc, cc, fs, fd)
 
 
 @pn.depends(sel_lights_cycle.param.value, watch=True)
 def on_light_cycle_changed(light_cycle):
+    """Update the acquisition light cycles when the selection changes
+
+    Args:
+        light_cycle (list): The selected list of light cycles.
+    """
     controller.light_cycles = light_cycle
 
 
 # MARK: UI
 def ui_sidebar():
+    """Build the UI sidebar accordion with the configuration and control panels
+
+    Returns:
+        pn.layout.Accordion: The assembled sidebar.
+    """
     return pn.layout.Accordion(
         ("Camera position", pn.Column(plt_position, pg_progress)),
         ("Focus", plt_focus),
@@ -540,6 +738,11 @@ def ui_sidebar():
 
 
 def ui_main():
+    """Build the main UI column with controls, preview, and logs
+
+    Returns:
+        pn.Column: The assembled main area.
+    """
     return pn.Column(
         pn.layout.FlexBox(
             pn.Row(sel_printer, bt_connect_printer),
@@ -554,13 +757,19 @@ def ui_main():
 
 
 async def ui_show():
+    """Wire the controller callbacks, start the controller, and assemble the full UI
+
+    Returns:
+        pn.Row: The assembled sidebar and main UI.
+    """
+    # Wire controller callbacks to the UI panes before starting
     controller.on_send_image = on_update_still
     controller.on_send_focus_plot = on_update_focus_plot
     controller.on_send_position_plot = on_update_position_plot
     controller.on_send_progress = on_progress_updated
     controller.on_send_message = on_message_received
     controller.camera.post_callback = post_callback
-    await controller.start() 
+    await controller.start()
     await controller.capture_image()
     sidebar = ui_sidebar()
     sidebar.width = SIDE_BAR_WIDTH
